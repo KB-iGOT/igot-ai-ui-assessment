@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { ACCESS_TOKEN_2 } from "@/components/ConstantAPI";
 import "react-day-picker/dist/style.css";
 import { DayPicker } from "react-day-picker";
+import { useNavigate } from "react-router-dom";
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
@@ -26,7 +27,50 @@ const PastAssessmentsPage = () => {
   const [selectedLevel, setSelectedLevel] = useState("all");
   const [fromDate, setFromDate] = useState<Date | undefined>();
   const [toDate, setToDate] = useState<Date | undefined>();
+  const navigate = useNavigate();
+const handleView = (jobId : string) => {
+  pollGenerationStatus(
+    jobId,
+    (data) => {
+      navigate("/", { state: { viewJobData: data } });
+    },
+    (error) => {
+      console.error("Polling failed:", error);
+    }
+  );
+};
+ const pollGenerationStatus = async (
+    jobId: string,
+    onComplete: (data: any) => void,
+    onError: (error: any) => void
+  ) => {
+    const poll = async () => {
+      try {
+        const response = await fetch(
+          `/apis/proxies/v8/ai/assessments/v1/status/${jobId}`
+          ,
+        );
 
+        const result = await response.json();
+
+        if (result.status === "COMPLETED") {
+          onComplete(result);
+          return;
+        }
+
+        if (result.status === "FAILED") {
+          // onError(result); 
+          onComplete(result);
+          return;
+        }
+        setTimeout(poll, 5000);
+      } catch (err) {
+        onError(err);
+      }
+    };
+
+    poll();
+  };
   // Map API data to table structure
   const mappedAssessments = useMemo(() => {
     return assessmentList
@@ -116,11 +160,10 @@ const PastAssessmentsPage = () => {
 
   const getPastAssessments = async () => {
     try {
-      const url = `${BASE_URL}/ai-assment-generation/api/v2/history`;
+      const url = `/apis/proxies/v8/ai/assessments/v1/history`;
       const response = await fetch(url, {
         method: "GET",
         headers: {
-          "x-auth-token": ACCESS_TOKEN_2,
           "Content-Type": "application/json"
         }
       });
@@ -399,7 +442,7 @@ const PastAssessmentsPage = () => {
             </div>
 
             {/* Action */}
-            <div className="col-span-2 flex justify-end">
+            <div onClick={() => handleView(a.id)} className="col-span-2 flex justify-end">
               <button className="inline-flex items-center justify-center whitespace-nowrap text-sm font-medium ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 hover:bg-accent hover:text-accent-foreground h-9 rounded-md px-3 gap-1.5 text-primary opacity-70 group-hover:opacity-100 transition-opacity">
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" className="lucide lucide-eye w-4 h-4">
                   <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"></path>

@@ -206,7 +206,6 @@ const ContentInputStep = ({
           headers: {
             "Content-Type": "application/json",
             // Authorization: `Bearer ${user.access_token}`,
-            "x-auth-token": ACCESS_TOKEN_2,
           },
           body: JSON.stringify({
             request: {
@@ -262,7 +261,6 @@ const ContentInputStep = ({
           headers: {
             "Content-Type": "application/json",
             // Authorization: `Bearer ${user.access_token}`,
-            "x-auth-token": ACCESS_TOKEN_2,
           },
           body: JSON.stringify({
             request: {
@@ -336,7 +334,6 @@ const ContentInputStep = ({
           headers: {
             "Content-Type": "application/json",
             // Authorization: `Bearer ${user.access_token}`,
-            "x-auth-token": ACCESS_TOKEN_2,
           },
         }
       );

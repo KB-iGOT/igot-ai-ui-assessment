@@ -2,23 +2,45 @@ import { useAuth } from "@/contexts/AuthContext";
 import { NavLink, useNavigate } from "react-router-dom";
 import { toast } from "@/hooks/use-toast";
 import igotLogo from "@/assets/igot-ai-logo.svg";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import HelpDrawer from "@/components/HelpDrawer";
+import { ACCESS_TOKEN_2 } from "./ConstantAPI";
 
 const Header = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [openDrawer, setOpenDrawer] = useState(false);
+  const [userDetails , setUserDetails] = useState<any>(null);
 
-  const handleLogout = () => {
-    logout();
-    toast({
-      title: "Logged out",
-      description: "You have been successfully logged out.",
-    });
-    navigate("/login");
-  };
-
+    useEffect(() => {
+      fetchUserDetails();
+    }, []);
+   const fetchUserDetails = async () => {
+     try {
+       const response = await fetch(
+         '/apis/proxies/v8/api/user/v2/read',
+         {
+           method: 'GET',
+           headers: {
+             'Content-Type': 'application/json',
+           },
+         }
+       );  
+ 
+       if (!response.ok) throw new Error('Failed to fetch user details');
+       const data = await response.json();
+       const userDetails = data?.result?.response;
+       setUserDetails(userDetails);
+       return data?.result || null;
+     } catch (error) {
+       console.error('User details fetch error:', error);
+       return null;
+     }
+   };
+ const handleLogout = async () => {
+   const resetUrl = `/apis/reset`;
+    window.location.href = resetUrl;
+};
   const navItems = [
     {
       label: "Home",
@@ -135,7 +157,7 @@ const Header = () => {
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" className="lucide lucide-circle-help w-[18px] h-[18px]"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><path d="M12 17h.01"></path></svg>
           </button>
-          {user && (
+          {userDetails && (
             <div className="flex items-center gap-3">
 
               {/* User Name */}
@@ -144,7 +166,7 @@ const Header = () => {
                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" className="lucide lucide-user w-3.5 h-3.5 text-primary"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
                 </div>
                 <span className="text-xs font-medium text-foreground">
-                  {user.username}
+                  {userDetails?.firstName} {userDetails?.lastName}
                 </span>
                 <button onClick={handleLogout} className=" rounded-full flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors p-1">
                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" className="lucide lucide-log-out w-3.5 h-3.5"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" x2="9" y1="12" y2="12"></line></svg>

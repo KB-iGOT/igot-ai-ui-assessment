@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Header from "@/components/Header";
 import AssessmentTypeSelector from "@/components/AssessmentTypeSelector";
 import StepNavigation from "@/components/StepNavigation";
@@ -10,6 +10,7 @@ import { ListChecks, ToggleLeft, MessageSquare, FileText } from "lucide-react";
 import { GenerateLoaderDialog } from "@/components/common/GenerateLoaderDialog";
 import Tooltip from "@mui/material/Tooltip";
 import { ACCESS_TOKEN_2 } from "@/components/ConstantAPI";
+import { useLocation } from "react-router-dom";
 
 const defaultQuestionTypes = [
   { id: "mcq", name: "Multiple Choice", icon: ListChecks, enabled: true, count: 10 },
@@ -20,7 +21,58 @@ const defaultQuestionTypes = [
   // { id: "essay", name: "Essay", icon: FileText, enabled: false, count: 0 },
 ];
 
+const normalizeQuestions = (rawQuestions: any[]) => {
+  return rawQuestions.map((q: any, index: number) => {
+    const type = q.question_type?.toUpperCase();
+    const isMCQ = type === "MCQ";
+    const isMulti = type === "MULTICHOICE";
+    const isMTF = type === "MTF";
+
+    let correctAnswer: string | string[] = "";
+
+    if (isMCQ && q.correct_option_index !== undefined && q.correct_option_index !== null) {
+      const idx = Number(q.correct_option_index);
+      if (!isNaN(idx)) correctAnswer = String.fromCharCode(65 + idx);
+    }
+
+    if (isMulti && Array.isArray(q.correct_option_index)) {
+      correctAnswer = q.correct_option_index.map((i: any) => String.fromCharCode(65 + Number(i)));
+    }
+
+    if (type === "FTB" || type === "TRUEFALSE") {
+      correctAnswer = q.correct_answer ?? "";
+    }
+
+    let options: { label: string; text: string }[] = [];
+
+    if ((isMCQ || isMulti) && Array.isArray(q.options)) {
+      options = q.options.map((opt: any, i: number) => ({ label: String.fromCharCode(65 + i), text: opt.text }));
+    }
+
+    if (isMTF && Array.isArray(q.pairs)) {
+      options = q.pairs.map((pair: any, i: number) => ({
+        label: String.fromCharCode(65 + i),
+        text: pair.left,
+        right: pair.right,
+      }));
+    }
+
+    return {
+      id: index + 1,
+      type,
+      bloomLevel: q.blooms_level ? q.blooms_level.charAt(0).toUpperCase() + q.blooms_level.slice(1) : "Remember",
+      bloomPercent: q.relevance_percentage ?? 0,
+      question: q.question_text || (type === "MTF" && "Match the following"),
+      options,
+      correctAnswer,
+      question_type_rationale: q.reasoning?.question_type_rationale ?? "—",
+      rationale: q.reasoning?.question_type_rationale ?? "—",
+    };
+  });
+};
+
 const Index = () => {
+  const location = useLocation();
   const [assessmentType, setAssessmentType] = useState("practice");
   const [assessmentData, setAssessmentData] = useState<any>([]);
   const [currentStep, setCurrentStep] = useState("content");
@@ -48,6 +100,27 @@ const Index = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isGenerated, setIsGenerated] = useState(false);
   const [questions, setQuestions] = useState<any[]>([]);
+
+  useEffect(() => {
+    const viewJobData = location.state?.viewJobData;
+    if (!viewJobData) return;
+
+    const assessmentDataFetch =
+      typeof viewJobData.assessment_data === "string"
+        ? JSON.parse(viewJobData.assessment_data)
+        : viewJobData.assessment_data;
+
+    const rawQuestions = Object.values(assessmentDataFetch.questions).flat();
+    const normalizedQuestions = normalizeQuestions(rawQuestions as any[]);
+
+    setAssessmentData(assessmentDataFetch);
+    setQuestions(normalizedQuestions);
+    setSpecificCourseId(viewJobData.job_id);
+    setCompletedSteps(["content", "configuration"]);
+    setIsGenerated(true);
+    setCurrentStep("results");
+  }, []);
+
   const handleBloomChange = (id: string, value: number) => {
     setBloomValues((prev) => ({ ...prev, [id]: value }));
   };
@@ -73,11 +146,8 @@ const Index = () => {
     const poll = async () => {
       try {
         const response = await fetch(
-          `${BASE_URL}/ai-assment-generation/api/v2/status/${jobId}`
+          `/apis/proxies/v8/ai/assessments/v1/status/${jobId}`
           , {
-            headers: {
-              "x-auth-token": ACCESS_TOKEN_2,
-            }
           }
         );
 
@@ -131,9 +201,9 @@ const Index = () => {
     formData.append("difficulty", assessmentLevel);
     formData.append("total_questions", totalQuestions.toString());
 
-    enabledQuestionTypes.forEach(type => {
-      formData.append("question_types", type);
-    });
+    // enabledQuestionTypes.forEach(type => {
+    //   formData.append("question_types", type);
+    // });
 
 
     formData.append("time_limit", timeLimit.toString());
@@ -149,11 +219,8 @@ const Index = () => {
     });
 
     try {
-      const response = await fetch(`${BASE_URL}/ai-assment-generation/api/v2/generate`, {
+      const response = await fetch(`/apis/proxies/v8/ai/assessments/v1/generate`, {
         method: "POST",
-        headers: {
-          "x-auth-token": ACCESS_TOKEN_2,
-        },
         body: formData,
       });
 
@@ -164,87 +231,8 @@ const Index = () => {
 
       const result = await response.json();
       setSpecificCourseId(result.job_id)
-      const formatQuestionType = (type?: string) => {
-        if (!type) return "";
-
-        const upper = type.toUpperCase();
-
-        if (upper === "TRUEFALSE") return "TRUE/FALSE";
-        if (upper === "MULTICHOICE") return "MULTI SELECT QUESTIONS";
-
-        return upper; // MCQ, MTF, FTB etc
-      };
-      const normalizeQuestions = (rawQuestions: any[]) => {
-        return rawQuestions.map((q: any, index: number) => {
-          const type = q.question_type?.toUpperCase(); // MCQ / FTB / MTF / TRUEFALSE / MULTICHOICE
-
-          const isMCQ = type === "MCQ";
-          const isMulti = type === "MULTICHOICE";
-          const isMTF = type === "MTF";
-
-          let correctAnswer: string | string[] = "";
-
-          // ✅ MCQ → single correct index (number or string)
-          if (isMCQ && q.correct_option_index !== undefined && q.correct_option_index !== null) {
-            const idx = Number(q.correct_option_index);
-            if (!isNaN(idx)) {
-              correctAnswer = String.fromCharCode(65 + idx);
-            }
-          }
-
-          // ✅ MULTICHOICE → array of correct indexes
-          if (isMulti && Array.isArray(q.correct_option_index)) {
-            correctAnswer = q.correct_option_index.map((i: any) =>
-              String.fromCharCode(65 + Number(i))
-            );
-          }
-
-          // ✅ FTB / TRUEFALSE → direct correct answer string
-          if (type === "FTB" || type === "TRUEFALSE") {
-            correctAnswer = q.correct_answer ?? "";
-          }
-
-          // ✅ MTF → show pairs as options (left → right)
-          let options: { label: string; text: string }[] = [];
-
-          if ((isMCQ || isMulti) && Array.isArray(q.options)) {
-            options = q.options.map((opt: any, i: number) => ({
-              label: String.fromCharCode(65 + i),
-              text: opt.text,
-            }));
-          }
-
-          if (isMTF && Array.isArray(q.pairs)) {
-            options = q.pairs.map((pair: any, i: number) => ({
-              label: String.fromCharCode(65 + i),
-              text: pair.left,      // LEFT side only
-              right: pair.right,    // store RIGHT separately
-            }));
-          }
-
-          return {
-            id: index + 1,
-
-            type: type,
-
-            bloomLevel: q.blooms_level
-              ? q.blooms_level.charAt(0).toUpperCase() + q.blooms_level.slice(1)
-              : "Remember",
-
-            bloomPercent: q.relevance_percentage ?? 0,
-
-            question: q.question_text || type == 'MTF' && 'Match the following',
-
-            options,
-
-            correctAnswer,
-
-            question_type_rationale: q.reasoning?.question_type_rationale ?? "—",
-
-            rationale: q.reasoning?.question_type_rationale ?? "—",
-          };
-        });
-      };
+      
+   
 
 
 

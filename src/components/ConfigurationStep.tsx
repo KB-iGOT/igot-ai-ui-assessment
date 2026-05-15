@@ -46,12 +46,12 @@ const assessmentLevels = [
 ];
 
 const bloomLevels = [
-  { id: "remember", name: "Remember", description: "Recall facts", color: "bg-sky-100 border-sky-200 text-sky-700" },
-  { id: "understand", name: "Understand", description: "Explain concepts", color: "bg-teal-100 border-teal-200 text-teal-700" },
-  { id: "apply", name: "Apply", description: "Use in new situations", color: "bg-emerald-100 border-emerald-200 text-emerald-700" },
-  { id: "analyze", name: "Analyze", description: "Draw connections", color: "bg-amber-100 border-amber-200 text-amber-700" },
-  { id: "evaluate", name: "Evaluate", description: "Justify decisions", color: "bg-orange-100 border-orange-200 text-orange-700" },
-  { id: "create", name: "Create", description: "Produce new work", color: "bg-rose-100 border-rose-200 text-rose-700" },
+  { id: "Remember", name: "Remember", description: "Recall facts", color: "bg-sky-100 border-sky-200 text-sky-700" },
+  { id: "Understand", name: "Understand", description: "Explain concepts", color: "bg-teal-100 border-teal-200 text-teal-700" },
+  { id: "Apply", name: "Apply", description: "Use in new situations", color: "bg-emerald-100 border-emerald-200 text-emerald-700" },
+  { id: "Analyze", name: "Analyze", description: "Draw connections", color: "bg-amber-100 border-amber-200 text-amber-700" },
+  { id: "Evaluate", name: "Evaluate", description: "Justify decisions", color: "bg-orange-100 border-orange-200 text-orange-700" },
+  { id: "Create", name: "Create", description: "Produce new work", color: "bg-rose-100 border-rose-200 text-rose-700" },
 ];
 
 const ConfigurationStep = ({

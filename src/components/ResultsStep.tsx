@@ -240,26 +240,26 @@ const ResultsStep = ({
       let mimeType = "";
 
       if (selectedFormat === "json") {
-        url = `${BASE_URL}/ai-assment-generation/api/v2/download_json/${specificCourseId || courseIds}`;
+        url = `/apis/proxies/v8/ai/assessments/v1/download/${specificCourseId || courseIds}?format=json`;
         fileName = "assessment.json";
         mimeType = "application/json";
       }
 
       if (selectedFormat === "pdf") {
         // example – update when PDF API is ready
-        url = `${BASE_URL}/ai-assment-generation/api/v2/download_pdf/${specificCourseId || courseIds}`;
+        url = `/apis/proxies/v8/ai/assessments/v1/download/${specificCourseId || courseIds}?format=pdf`;
         fileName = "assessment.pdf";
         mimeType = "application/pdf";
       }
       if (selectedFormat === "csv") {
-        // example – update when PDF API is ready
-        url = `${BASE_URL}/ai-assment-generation/api/v2/download_csv/${specificCourseId || courseIds}`;
+        // example – update when CSV API is ready
+        url = `/apis/proxies/v8/ai/assessments/v1/download/${specificCourseId || courseIds}?format=csv`;
         fileName = "assessment.csv";
         mimeType = "application/csv";
       }
       if (selectedFormat === "word") {
-        // example – update when PDF API is ready
-        url = `${BASE_URL}/ai-assment-generation/api/v2/download_docx/${specificCourseId || courseIds}`;
+        // example – update when Word API is ready
+        url = `/apis/proxies/v8/ai/assessments/v1/download/${specificCourseId || courseIds}?format=docx`;
         fileName = "assessment.docx";
         mimeType = "application/docx";
       }
@@ -271,7 +271,6 @@ const ResultsStep = ({
         method: "GET",
         headers: {
           accept: mimeType,
-          "x-auth-token": token,
         },
       });
 
