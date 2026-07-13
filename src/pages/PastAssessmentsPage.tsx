@@ -21,6 +21,18 @@ import { useNavigate } from "react-router-dom";
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
+const getConfigFromRecord = (record: any) => {
+  const candidates = [record?.config, record?.metadata?.config, record?.metadata_config, record?.metadata?.metadata_config];
+
+  for (const candidate of candidates) {
+    if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+      return candidate;
+    }
+  }
+
+  return {};
+};
+
 const PastAssessmentsPage = () => {
   const [search, setSearch] = useState("");
   const [assessmentList, setAssessmentList] = useState([]);
@@ -51,8 +63,22 @@ const handleView = (jobId : string) => {
   pollGenerationStatus(
     jobId,
     (data) => {
-      const config = { ...(data.config || {}), ...(originalItem?.config || {}) };
-      navigate("/", { state: { viewJobData: { ...data, config } } });
+      const statusConfig = getConfigFromRecord(data);
+      const historyConfig = getConfigFromRecord(originalItem);
+      const mergedConfig = { ...historyConfig, ...statusConfig };
+
+      const viewJobData = {
+        ...data,
+        ...originalItem,
+        config: mergedConfig,
+        metadata: {
+          ...(data?.metadata || {}),
+          ...(originalItem?.metadata || {}),
+          config: mergedConfig,
+        },
+      };
+
+      navigate("/", { state: { viewJobData } });
     },
     (error) => {
       console.error("Polling failed:", error);
@@ -96,8 +122,7 @@ const handleView = (jobId : string) => {
     return assessmentList
       .filter((item: any) => item.status === "COMPLETED")
       .map((item: any, idx: number) => {
-        console.log('item', item)
-        const config = item.config || {};
+        const config = getConfigFromRecord(item);
         const createdAt = item.created_at ? new Date(item.created_at) : null;
         return {
           id: item.job_id,

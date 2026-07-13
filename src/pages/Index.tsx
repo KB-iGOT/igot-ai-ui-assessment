@@ -72,6 +72,23 @@ const normalizeQuestions = (rawQuestions: any[]) => {
   });
 };
 
+const getConfigFromViewData = (viewJobData: any) => {
+  const candidates = [
+    viewJobData?.config,
+    viewJobData?.metadata?.config,
+    viewJobData?.metadata_config,
+    viewJobData?.metadata?.metadata_config,
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+      return candidate;
+    }
+  }
+
+  return {};
+};
+
 const Index = ({userDetails}) => {
   const location = useLocation();
   const [assessmentType, setAssessmentType] = useState("practice");
@@ -127,7 +144,7 @@ const Index = ({userDetails}) => {
     setCurrentStep("results");
 
     // Restore fields needed for regenerate
-    const config = viewJobData.config || {};
+    const config = getConfigFromViewData(viewJobData);
 
     if (viewJobData.course_names?.length) {
       setCourseNames(viewJobData.course_names);
@@ -151,6 +168,10 @@ const Index = ({userDetails}) => {
     if (config.language) setLanguage(config.language.charAt(0).toUpperCase() + config.language.slice(1));
     const timeLimitValue = config.time_limit ?? viewJobData.time_limit;
     if (timeLimitValue) setTimeLimit(Number(timeLimitValue));
+
+    if (typeof config.enable_blooms === "boolean") {
+      setBloomEnabled(config.enable_blooms);
+    }
 
     if (config.blooms_config) {
       const blooms = typeof config.blooms_config === "string" ? JSON.parse(config.blooms_config) : config.blooms_config;
