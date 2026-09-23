@@ -11,6 +11,7 @@ import { GenerateLoaderDialog } from "@/components/common/GenerateLoaderDialog";
 import Tooltip from "@mui/material/Tooltip";
 import { ACCESS_TOKEN_2 } from "@/components/ConstantAPI";
 import { useLocation } from "react-router-dom";
+import { fetchAssessmentStatus } from "@/components/assessment-api";
 
 const defaultQuestionTypes = [
   { id: "mcq", name: "Single selection MCQs", icon: ListChecks, enabled: true, count: 10 },
@@ -21,6 +22,32 @@ const defaultQuestionTypes = [
   // { id: "essay", name: "Essay", icon: FileText, enabled: false, count: 0 },
 ];
 
+const letterAt = (i: number) => String.fromCharCode(65 + i);
+
+/**
+ * Flattens an assessment into its authoritative question sequence.
+ *
+ * `question_order` is that sequence. The type buckets under `questions` are
+ * storage only — `assessment_data` is a jsonb column, so their key order is
+ * whatever Postgres returns, not the order the assessment is in. Reading the
+ * buckets directly is how the on-screen order drifts from every download.
+ *
+ * Anything the order array fails to name is kept at the end rather than
+ * dropped, so a stale or partial order can never hide a question.
+ */
+const flattenInOrder = (assessmentData: any): any[] => {
+  const all = Object.values(assessmentData?.questions ?? {}).flat() as any[];
+  const order = assessmentData?.question_order;
+  if (!Array.isArray(order) || !order.length) return all;
+
+  const byId = new Map(all.map((q: any) => [q?.question_id, q]));
+  const named = new Set(order);
+  return [
+    ...order.map((id: string) => byId.get(id)).filter(Boolean),
+    ...all.filter((q: any) => !named.has(q?.question_id)),
+  ];
+};
+
 const normalizeQuestions = (rawQuestions: any[]) => {
   return rawQuestions.map((q: any, index: number) => {
     const type = q.question_type?.toUpperCase();
@@ -28,34 +55,57 @@ const normalizeQuestions = (rawQuestions: any[]) => {
     const isMulti = type === "MULTICHOICE";
     const isMTF = type === "MTF";
 
+    let options: {
+      label: string;
+      text: string;
+      right?: string;
+      index?: number;
+    }[] = [];
+
+    if ((isMCQ || isMulti) && Array.isArray(q.options)) {
+      options = q.options.map((opt: any, i: number) => ({
+        label: letterAt(i),
+        text: opt?.text ?? "",
+        // The option's own index as stored, falling back to its position only
+        // when the API omits one. Kept so edits can be sent back correctly.
+        index: Number.isFinite(Number(opt?.index)) ? Number(opt.index) : i,
+      }));
+    }
+
+    if (isMTF && Array.isArray(q.pairs)) {
+      options = q.pairs.map((pair: any, i: number) => ({
+        label: letterAt(i),
+        text: pair.left,
+        right: pair.right,
+      }));
+    }
+
+    /**
+     * Display letter for an API answer index, matched against each option's
+     * own `index` value rather than its array position — assessments
+     * generated before prompt v4.3 carry one-based indexes, and resolving
+     * those by position shows the wrong answer, off by one.
+     */
+    const labelForIndex = (value: any) => {
+      const position = options.findIndex((o) => o.index === Number(value));
+      return position >= 0 ? letterAt(position) : "";
+    };
+
     let correctAnswer: string | string[] = "";
 
     if (isMCQ && q.correct_option_index !== undefined && q.correct_option_index !== null) {
-      const idx = Number(q.correct_option_index);
-      if (!isNaN(idx)) correctAnswer = String.fromCharCode(65 + idx);
+      correctAnswer = labelForIndex(q.correct_option_index);
     }
 
     if (isMulti && Array.isArray(q.correct_option_index)) {
-      correctAnswer = q.correct_option_index.map((i: any) => String.fromCharCode(65 + Number(i)));
+      correctAnswer = q.correct_option_index.map(labelForIndex).filter(Boolean);
     }
 
     if (type === "FTB" || type === "TRUEFALSE") {
       correctAnswer = q.correct_answer ?? "";
     }
 
-    let options: { label: string; text: string }[] = [];
-
-    if ((isMCQ || isMulti) && Array.isArray(q.options)) {
-      options = q.options.map((opt: any, i: number) => ({ label: String.fromCharCode(65 + i), text: opt.text }));
-    }
-
-    if (isMTF && Array.isArray(q.pairs)) {
-      options = q.pairs.map((pair: any, i: number) => ({
-        label: String.fromCharCode(65 + i),
-        text: pair.left,
-        right: pair.right,
-      }));
-    }
+    const kcm = q.reasoning?.competency_alignment?.kcm || {};
 
     return {
       id: index + 1,
@@ -63,11 +113,29 @@ const normalizeQuestions = (rawQuestions: any[]) => {
       type,
       bloomLevel: q.blooms_level ? q.blooms_level.charAt(0).toUpperCase() + q.blooms_level.slice(1) : "Remember",
       bloomPercent: q.relevance_percentage ?? 0,
-      question: q.question_text || (type === "MTF" && "Match the following"),
+      // MTF holds its stem in matching_context; every other type in question_text.
+      question:
+        (isMTF ? q.matching_context : q.question_text) ||
+        (isMTF ? "Match the following" : ""),
       options,
       correctAnswer,
       question_type_rationale: q.reasoning?.question_type_rationale ?? "—",
-      rationale: q.reasoning?.question_type_rationale ?? "—",
+      rationale:
+        q.answer_rationale?.correct_answer_explanation ??
+        q.reasoning?.question_type_rationale ??
+        "—",
+
+      // Mapping & quality. Carried on the question so edits survive — these
+      // used to be re-derived per render by matching on question_text, which
+      // broke whenever the text was edited.
+      relevance: q.relevance_percentage ?? 0,
+      learningOutcome: q.reasoning?.learning_objective_alignment ?? "",
+      competency: kcm.competency_theme ?? "",
+      // Not editable in the UI, but required whenever the theme is saved:
+      // the API validates the KCM triple as all-or-nothing.
+      competencyArea: kcm.competency_area ?? "",
+      competencySubTheme: kcm.competency_sub_theme ?? "",
+      courseName: q.course_name ?? "",
     };
   });
 };
@@ -106,6 +174,10 @@ const Index = ({userDetails}) => {
   const [questionTypes, setQuestionTypes] = useState(defaultQuestionTypes);
   const [assessmentLevel, setAssessmentLevel] = useState("intermediate");
   const [specificCourseId, setSpecificCourseId] = useState();
+  // Optimistic-concurrency token for the editing endpoints. Sourced from
+  // GET /status and advanced by every save; sending it is what turns a
+  // double submission into a 409 instead of a second write.
+  const [assessmentVersion, setAssessmentVersion] = useState<number | undefined>(undefined);
   const [bloomValues, setBloomValues] = useState<Record<string, number>>({
     remember: 10,
     understand: 20,
@@ -133,12 +205,13 @@ const Index = ({userDetails}) => {
         ? JSON.parse(viewJobData.assessment_data)
         : viewJobData.assessment_data;
 
-    const rawQuestions = Object.values(assessmentDataFetch.questions).flat();
+    const rawQuestions = flattenInOrder(assessmentDataFetch);
     const normalizedQuestions = normalizeQuestions(rawQuestions as any[]);
 
     setAssessmentData(assessmentDataFetch);
     setQuestions(normalizedQuestions);
     setSpecificCourseId(viewJobData.job_id);
+    setAssessmentVersion(viewJobData.version);
     setCompletedSteps(["content", "configuration"]);
     setIsGenerated(true);
     setCurrentStep("results");
@@ -185,6 +258,31 @@ const Index = ({userDetails}) => {
         enabled: qt.id in counts,
         count: counts[qt.id] ?? qt.count,
       })));
+    }
+
+    // `viewJobData` is a snapshot taken when "View" was clicked in Past
+    // Assessments. The browser keeps it in history state across a hard
+    // refresh, so this effect re-runs on reload with that SAME frozen
+    // snapshot rather than anything newer — a page reload alone never calls
+    // the status API. Re-confirm against the server so a reload always shows
+    // what is actually saved, not just what was true when the snapshot was
+    // taken.
+    if (viewJobData.job_id) {
+      fetchAssessmentStatus(viewJobData.job_id)
+        .then((data) => {
+          const freshAssessmentData =
+            typeof data.assessment_data === "string"
+              ? JSON.parse(data.assessment_data)
+              : data.assessment_data;
+          if (!freshAssessmentData?.questions) return;
+
+          setAssessmentData(freshAssessmentData);
+          setAssessmentVersion(data.version);
+          setQuestions(normalizeQuestions(flattenInOrder(freshAssessmentData)));
+        })
+        .catch(() => {
+          /* keep showing the snapshot already applied above */
+        });
     }
   }, []);
 
@@ -358,9 +456,10 @@ const Index = ({userDetails}) => {
           }
 
           setAssessmentData(assessmentDataFetch);
+          setAssessmentVersion(completedData.version);
 
-          const questionsByType = assessmentDataFetch.questions;
-          const rawQuestions = Object.values(questionsByType).flat();
+
+          const rawQuestions = flattenInOrder(assessmentDataFetch);
           const normalizedQuestions = normalizeQuestions(rawQuestions);
           setQuestions(normalizedQuestions);
           setCurrentStep("results");
@@ -395,6 +494,29 @@ const Index = ({userDetails}) => {
       setIsGenerating(false);
     }
   };
+  /**
+   * Re-reads the assessment from the server and replaces what is on screen.
+   *
+   * Called after a 409 or a vanished question — both mean the local copy is
+   * behind and nothing was written, so the only correct move is to reload and
+   * let the reviewer re-apply. Retrying the same call would just conflict again.
+   */
+  const reloadAssessment = async () => {
+    if (!specificCourseId) return;
+    const data = await fetchAssessmentStatus(specificCourseId as string);
+
+    const assessmentDataFetch =
+      typeof data.assessment_data === "string"
+        ? JSON.parse(data.assessment_data)
+        : data.assessment_data;
+
+    if (!assessmentDataFetch?.questions) return;
+
+    setAssessmentData(assessmentDataFetch);
+    setAssessmentVersion(data.version);
+    setQuestions(normalizeQuestions(flattenInOrder(assessmentDataFetch)));
+  };
+
 
 
   const handleStartOver = () => {
@@ -556,6 +678,10 @@ const Index = ({userDetails}) => {
             onRegenerate={() => handleGenerate("regenerate")}
             assessmentData={assessmentData}
             viewJobData={location.state?.viewJobData}
+            jobId={specificCourseId as string | undefined}
+            version={assessmentVersion}
+            onVersionChange={setAssessmentVersion}
+            onReload={reloadAssessment}
           />
         )}
       </main>

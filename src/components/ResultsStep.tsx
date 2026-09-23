@@ -1,7 +1,5 @@
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
-import { Input } from "./ui/input";
-import { Textarea } from "./ui/textarea";
 import {
   Download,
   RefreshCw,
@@ -13,38 +11,37 @@ import {
   ChevronUp,
   FileJson,
   FileType,
-  File,
   Lightbulb,
   Target,
   HelpCircle,
   Pencil,
-  Save,
+  Plus,
+  Trash2,
+  GripVertical,
+  Loader2,
   X,
   Sparkles,
-  ShieldCheck
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { ACCESS_TOKEN_2 } from "./ConstantAPI";
-
-interface QuestionOption {
-  label: string;
-  text: string;
-  right?: string; // right (only for MTF)
-}
-
-interface Question {
-  id: number;
-  questionId?: string;
-  type: string;
-  bloomLevel: string;
-  bloomPercent: number;
-  question: string;
-  options: QuestionOption[];
-  correctAnswer: string | string[];
-  rationale: string;
-}
+import EditQuestionDialog from "./EditQuestionDialog";
+import type { Question } from "./question-types";
+import {
+  correctAnswerText as getCorrectAnswerText,
+  createBlankQuestion,
+  nextQuestionId,
+} from "./question-types";
+import {
+  AssessmentApiError,
+  createQuestion,
+  deleteQuestion,
+  reorderQuestions,
+  updateQuestion,
+} from "./assessment-api";
+import { describeErrors } from "./assessment-errors";
+import { apiQuestionType, toCreateBody, toUpdates } from "./question-payload";
 
 interface ResultsStepProps {
   isGenerated: boolean;
@@ -60,7 +57,14 @@ interface ResultsStepProps {
   onRegenerate: () => void;
   isGenerating: any
   assessmentData: any,
-  viewJobData: any
+  viewJobData: any;
+  /** Assessment job id. Without it nothing can be persisted. */
+  jobId?: string;
+  /** Current assessment version, sent with every save to detect conflicts. */
+  version?: number;
+  onVersionChange?: (version: number) => void;
+  /** Re-reads the assessment after a conflict or a vanished question. */
+  onReload?: () => Promise<void>;
 }
 const BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
@@ -193,15 +197,37 @@ const ResultsStep = ({
   isGenerating,
   onRegenerate,
   assessmentData,
-  viewJobData
+  viewJobData,
+  jobId,
+  version,
+  onVersionChange,
+  onReload,
 }: ResultsStepProps) => {
   const [expandedQuestions, setExpandedQuestions] = useState<number[]>([]);
   const [selectedFormat, setSelectedFormat] = useState("pdf");
   const [editingQuestionId, setEditingQuestionId] = useState<number | null>(null);
-  const [editForm, setEditForm] = useState<Question | null>(null);
+  const [draftQuestion, setDraftQuestion] = useState<Question | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Question | null>(null);
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const [reorderAnnouncement, setReorderAnnouncement] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Read inside the debounced order save, which would otherwise close over
+  // the version from the render that scheduled it.
+  const versionRef = useRef(version);
+  versionRef.current = version;
+
+  const orderSaveTimer = useRef<number | null>(null);
+  // The sequence a scheduled save will send, kept so it can be flushed early.
+  const pendingOrder = useRef<Question[] | null>(null);
   const [showCsvModal, setShowCsvModal] = useState(false);
   const [csvVariant, setCsvVariant] = useState<"basic" | "advance">("basic");
-  console.log('assessmentData', assessmentData)
+
+  // A draft (new question) takes precedence — it has no place in `questions` yet.
+  const editingQuestion =
+    draftQuestion ?? questions.find(q => q.id === editingQuestionId) ?? null;
+  const isCreating = draftQuestion !== null;
 
   const toggleQuestion = (id: number) => {
     setExpandedQuestions(prev =>
@@ -211,38 +237,333 @@ const ResultsStep = ({
 
   const startEditing = (question: Question) => {
     setEditingQuestionId(question.id);
-    setEditForm({ ...question, options: question.options.map(o => ({ ...o })) });
     if (!expandedQuestions.includes(question.id)) {
       setExpandedQuestions(prev => [...prev, question.id]);
     }
   };
 
-  const cancelEditing = () => {
-    setEditingQuestionId(null);
-    setEditForm(null);
+  /**
+   * Identity allocation is monotonic for the session. Taking max+1 of the
+   * current questions would recycle the id of a deleted highest question,
+   * handing a new question an identity that previously belonged to a different
+   * one — harmless for rendering, but a hazard for audit trails and anything
+   * keyed on it. The mark tracks the highest id ever seen, including ids since
+   * deleted, so it must be updated on render rather than only on allocation.
+   */
+  const idHighWater = useRef(0);
+  idHighWater.current = Math.max(
+    idHighWater.current,
+    ...questions.map(q => q.id),
+    0
+  );
+
+  const allocateQuestionId = () => {
+    idHighWater.current = Math.max(idHighWater.current, nextQuestionId(questions) - 1) + 1;
+    return idHighWater.current;
   };
 
-  const saveEditing = () => {
-    if (!editForm) return;
-    setQuestions(prev => prev.map(q => q.id === editForm.id ? editForm : q));
+  const startCreating = () => setDraftQuestion(createBlankQuestion(allocateQuestionId()));
+
+  const cancelEditing = () => {
     setEditingQuestionId(null);
-    setEditForm(null);
+    setDraftQuestion(null);
+  };
+
+  /**
+   * Turns a rejected call into something the reviewer can act on.
+   *
+   * A stale local copy — a 409, or a question that no longer exists — is not a
+   * retry. Nothing was written and the screen is behind, so the assessment is
+   * reloaded and the reviewer re-applies; retrying would only conflict again.
+   * Everything else is a validation failure, whose wording comes from the
+   * error code because the API deliberately sends no message string.
+   */
+  const handleApiError = async (err: unknown, title: string) => {
+    if (err instanceof AssessmentApiError && err.isStale) {
+      toast({
+        title: err.isVersionConflict ? "This assessment changed" : "Question not found",
+        description: `${describeErrors(err.errors)} Reloading the latest version.`,
+        variant: "destructive",
+      });
+      try {
+        await onReload?.();
+      } catch {
+        /* the reload failed too — a page refresh is the reviewer's way out */
+      }
+      return;
+    }
+
     toast({
-      title: "Question updated",
-      description: "Your changes have been saved successfully.",
+      title,
+      description:
+        err instanceof AssessmentApiError
+          ? describeErrors(err.errors)
+          : "Could not reach the server. Check your connection and try again.",
+      variant: "destructive",
     });
   };
 
-  const updateEditForm = (field: keyof Question, value: string) => {
-    if (!editForm) return;
-    setEditForm({ ...editForm, [field]: value });
+  const cancelPendingOrderSave = () => {
+    if (orderSaveTimer.current !== null) {
+      window.clearTimeout(orderSaveTimer.current);
+      orderSaveTimer.current = null;
+    }
   };
 
-  const updateOptionText = (index: number, text: string) => {
-    if (!editForm) return;
-    const newOptions = [...editForm.options];
-    newOptions[index] = { ...newOptions[index], text };
-    setEditForm({ ...editForm, options: newOptions });
+  const notSavable = () => {
+    toast({
+      title: "Not saved",
+      description: "This assessment has no job id, so changes cannot be saved.",
+      variant: "destructive",
+    });
+  };
+
+  /**
+   * Saves an edited or newly authored question.
+   *
+   * The dialog is closed by clearing the editing state, and that only happens
+   * on success — a rejected save leaves the reviewer's work on screen to fix
+   * rather than discarding it behind a toast.
+   */
+  const saveEditing = async (updated: Question) => {
+    if (!jobId) return notSavable();
+
+    setIsSaving(true);
+    try {
+      if (isCreating) {
+        // Settle any pending reorder first: an add lands at the end of the
+        // sequence the SERVER holds, not the one on screen.
+        await flushPendingOrderSave();
+
+        const result = await createQuestion(jobId, {
+          version: versionRef.current,
+          questionType: apiQuestionType(updated.type),
+          question: toCreateBody(updated),
+          // No position: appended, which matches where it lands locally.
+        });
+        onVersionChange?.(result.version);
+
+        // Identity and provenance are the server's to assign.
+        const saved: Question = {
+          ...updated,
+          questionId: result.question_id ?? (result.question?.question_id as string),
+        };
+        setQuestions(prev => [...prev, saved]);
+        setExpandedQuestions(prev => [...prev, saved.id]);
+        setDraftQuestion(null);
+        toast({
+          title: "Question added",
+          description: `Added as question ${questions.length + 1} of this assessment.`,
+        });
+        // Reconciles the optimistic add against what the server actually
+        // stored — the local patch above is applied instantly for a
+        // responsive dialog close, this catches anything it got wrong
+        // without waiting on it.
+        onReload?.().catch(() => {});
+        return;
+      }
+
+      const before = questions.find(q => q.id === updated.id);
+      if (!before?.questionId) {
+        await handleApiError(
+          new AssessmentApiError(404, { errors: [{ code: "question_not_found" }] }),
+          "Could not save the question"
+        );
+        return;
+      }
+
+      const updates = toUpdates(before, updated);
+      if (!Object.keys(updates).length) {
+        // Nothing moved — no round trip, and no version bump to explain.
+        setEditingQuestionId(null);
+        return;
+      }
+
+      const result = await updateQuestion(jobId, {
+        questionId: before.questionId,
+        version: versionRef.current,
+        updates,
+      });
+      onVersionChange?.(result.version);
+
+      setQuestions(prev => prev.map(q => (q.id === updated.id ? updated : q)));
+      setEditingQuestionId(null);
+      toast({
+        title: result.code === "no_changes" ? "No changes to save" : "Question updated",
+        description:
+          result.code === "no_changes"
+            ? "This question already matches what is saved."
+            : "Your changes have been saved to this assessment.",
+      });
+      // Reconciles the optimistic patch above against what the server
+      // actually stored, so a field the diff logic silently dropped shows up
+      // right away instead of only on the next full reload.
+      onReload?.().catch(() => {});
+    } catch (err) {
+      await handleApiError(err, "Could not save the question");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    if (!jobId) return notSavable();
+
+    const target = pendingDelete;
+    const position = questions.findIndex(q => q.id === target.id) + 1;
+
+    if (!target.questionId) {
+      await handleApiError(
+        new AssessmentApiError(404, { errors: [{ code: "question_not_found" }] }),
+        "Could not delete the question"
+      );
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      // Settle any pending reorder first, so the server is renumbering the
+      // same sequence the reviewer is looking at.
+      await flushPendingOrderSave();
+
+      const result = await deleteQuestion(jobId, {
+        questionId: target.questionId,
+        version: versionRef.current,
+      });
+      onVersionChange?.(result.version);
+
+      setQuestions(prev => prev.filter(q => q.id !== target.id));
+      setExpandedQuestions(prev => prev.filter(id => id !== target.id));
+      setPendingDelete(null);
+      toast({
+        title: "Question deleted",
+        description: `Question ${position} was removed. Remaining questions have been renumbered.`,
+      });
+      // Reconciles the optimistic removal — and the renumbering it implies
+      // for everything after it — against the server's own count and order.
+      onReload?.().catch(() => {});
+    } catch (err) {
+      await handleApiError(err, "Could not delete the question");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  /** How long to wait for the reviewer to settle before saving the order. */
+  const ORDER_SAVE_DELAY_MS = 1200;
+
+  const persistOrder = async (ordered: Question[]) => {
+    if (!jobId) return;
+
+    const questionOrder = ordered
+      .map(q => q.questionId)
+      .filter((id): id is string => Boolean(id));
+
+    // The call names every question or it is rejected wholesale — that check
+    // is the guard against a stale client silently dropping one, so there is
+    // no point sending a list we already know is short.
+    if (questionOrder.length !== ordered.length) return;
+
+    try {
+      const result = await reorderQuestions(jobId, {
+        questionOrder,
+        version: versionRef.current,
+      });
+      onVersionChange?.(result.version);
+    } catch (err) {
+      await handleApiError(err, "Could not save the new order");
+    }
+  };
+
+  /**
+   * Persists the sequence once the reviewer stops moving things.
+   *
+   * One call per drag session, not one per move: each call is a version bump
+   * and a round trip. Moves apply locally at once and the settled order is
+   * sent after a pause. This is the one part of the editor that genuinely
+   * cannot stay client-side — `question_order` is what every download reads.
+   */
+  const scheduleOrderSave = (ordered: Question[]) => {
+    if (!jobId) return;
+    cancelPendingOrderSave();
+    pendingOrder.current = ordered;
+
+    orderSaveTimer.current = window.setTimeout(() => {
+      orderSaveTimer.current = null;
+      const ordering = pendingOrder.current;
+      pendingOrder.current = null;
+      if (ordering) void persistOrder(ordering);
+    }, ORDER_SAVE_DELAY_MS);
+  };
+
+  /**
+   * Sends a still-pending reorder before some other change goes out.
+   *
+   * Dropping it instead would leave the server on the old sequence while the
+   * screen shows the new one, and the next add would land in the wrong place.
+   * Adds and deletes both rewrite `question_order` server-side, so the reorder
+   * has to be settled first rather than after.
+   */
+  const flushPendingOrderSave = async () => {
+    cancelPendingOrderSave();
+    const ordering = pendingOrder.current;
+    pendingOrder.current = null;
+    if (ordering) await persistOrder(ordering);
+  };
+
+  // Drop a scheduled save if the view goes away before it fires.
+  useEffect(() => cancelPendingOrderSave, []);
+
+  /**
+   * Moves a question from one position to another, shifting the rest — not a
+   * swap, so dragging across several positions behaves as the user expects.
+   */
+  const reorderQuestion = (from: number, to: number) => {
+    if (from === to || to < 0 || to >= questions.length) return;
+
+    const next = [...questions];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+
+    setQuestions(next);
+    setReorderAnnouncement(
+      `Question moved from position ${from + 1} to position ${to + 1} of ${questions.length}.`
+    );
+    scheduleOrderSave(next);
+  };
+
+  const handleDragStart = (index: number) => setDraggingIndex(index);
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (index !== dragOverIndex) setDragOverIndex(index);
+  };
+
+  const handleDrop = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (draggingIndex !== null) reorderQuestion(draggingIndex, index);
+    setDraggingIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggingIndex(null);
+    setDragOverIndex(null);
+  };
+
+  /** Arrow keys move a question while its grip handle has focus. */
+  const handleGripKeyDown = (e: React.KeyboardEvent, index: number) => {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault();
+    const to = e.key === "ArrowUp" ? index - 1 : index + 1;
+    if (to < 0 || to >= questions.length) return;
+    reorderQuestion(index, to);
+    // Keep focus on the handle that moved so it can be moved again.
+    requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLElement>(`[data-grip-index="${to}"]`);
+      el?.focus();
+    });
   };
 
 
@@ -423,32 +744,55 @@ const ResultsStep = ({
       <div className="card-elevated overflow-hidden">
         <div className="p-4 border-b border-border bg-muted/30">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <HelpCircle className="w-4 h-4 text-primary" />
-              <h4 className="font-medium text-foreground">Assessment Preview</h4>
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                <HelpCircle className="w-4 h-4 text-primary" />
+              </div>
+              <div>
+                <h4 className="font-medium text-foreground">Edit questions</h4>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Update any question, its options, answer and mapping — changes are saved to this assessment.
+                </p>
+                <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5">
+                  <GripVertical className="w-3 h-3 shrink-0" />
+                  Drag the handle to change question order, or focus it and use the arrow keys.
+                </p>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setExpandedQuestions(questions.map(q => q.id))}
-                className="text-xs text-primary hover:underline"
-              >
-                Expand All
-              </button>
-              <span className="text-muted-foreground">|</span>
-              <button
-                onClick={() => setExpandedQuestions([])}
-                className="text-xs text-primary hover:underline"
-              >
-                Collapse All
-              </button>
+            <div className="flex items-center gap-3 shrink-0">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setExpandedQuestions(questions.map(q => q.id))}
+                  className="text-xs text-primary hover:underline"
+                >
+                  Expand all
+                </button>
+                <span className="text-muted-foreground">|</span>
+                <button
+                  onClick={() => setExpandedQuestions([])}
+                  className="text-xs text-primary hover:underline"
+                >
+                  Collapse all
+                </button>
+              </div>
+              <Button size="sm" onClick={startCreating} className="h-8 gap-1.5">
+                <Plus className="w-3.5 h-3.5" />
+                Add question
+              </Button>
             </div>
           </div>
         </div>
 
 
 
+        {/* Announces reorder results to screen readers */}
+        <div aria-live="polite" className="sr-only">{reorderAnnouncement}</div>
+
         <div className="divide-y divide-border">
-          {questions?.map((q) => {
+          {questions?.map((q, qIndex) => {
+            // Display position is derived from array order — `q.id` is a stable
+            // identity that survives adding, deleting and reordering.
+            const position = qIndex + 1;
             const typeMap: Record<string, string> = {
               "MCQ": "Multiple Choice Question",
               "FTB": "FTB Question",
@@ -456,75 +800,70 @@ const ResultsStep = ({
               "MULTICHOICE": "Multi-Choice Question",
               "TRUEFALSE": "True/False Question"
             };
+            // Raw record is matched by the stable question_id and used only as a
+            // fallback for assessments generated before mapping fields were
+            // stored on the question. Text matching is deliberately avoided —
+            // it broke as soon as a question was edited.
             const rawType = typeMap[q.type] || Object.keys(assessmentData?.questions || {}).find(k => k.toUpperCase().includes(q.type));
-            console.log('rawType', rawType , assessmentData)
             const rawList = assessmentData?.questions?.[rawType] || [];
-            console.log('rawList', rawList)
-           let raw;
+            const raw = q.questionId
+              ? rawList.find((item: any) => item.question_id === q.questionId)
+              : undefined;
 
-if (q.type === "MTF") {
-  raw = rawList.find(
-    (item: any) => item.question_id === q.questionId
-  );
-} else {
-  raw =
-    rawList.find((item: any) =>
-      (item.question_text && item.question_text === q.question)
-    ) || rawList[0];
-}
-console.log('MTF q.question', q.question);
-console.log('MTF matching_context', rawList);
-console.log('Matched raw', raw);
-console.log('q.question ===========', q.question);
-console.log(
-  'matching contexts ==========',
-  rawList.map((x: any) => x.matching_context)
-);
-            // Extract details for use in your UI
-            const questionText = raw?.question_text || raw?.matching_context || "";
-            let correctAnswerText = "";
-            console.log('questions', q)
-            if (q.type === "MCQ" && raw?.correct_option_index !== undefined) {
-              correctAnswerText = raw.options?.[raw.correct_option_index]?.text || "";
-            } else if (q.type === "FTB") {
-              correctAnswerText = raw?.correct_answer;
-            } else if (q.type === "MTF") {
-              correctAnswerText = raw?.pairs?.map((p: any) => `${p.left} → ${p.right}`).join(", ");
-            } else if (q.type === "MULTICHOICE" && Array.isArray(raw?.correct_option_index)) {
-              correctAnswerText = (raw.correct_option_index || [])
-                .map((idx: number) => raw.options?.[idx]?.text)
-                .filter(Boolean)
-                .join(", ");
-            } else if (q.type === "TRUEFALSE") {
-              correctAnswerText = raw?.correct_answer;
-            }
-            const rationale = raw?.answer_rationale?.correct_answer_explanation;
-            console.log('rationale', rationale)
-            const whyFactor = raw?.answer_rationale?.why_factor;
-            const logicJustification = raw?.answer_rationale?.logic_justification;
-            const bloomsLevel = raw?.blooms_level;
-            const bloomsJustification = raw?.reasoning?.blooms_level_justification;
-            const learningObjective = raw?.reasoning?.learning_objective_alignment;
-            const courseName = raw?.course_name;
-            const kcm = raw?.reasoning?.competency_alignment?.kcm || {};
-            const kcmArea = kcm.competency_area;
-            const kcmTheme = kcm.competency_theme;
-            const kcmSubTheme = kcm.competency_sub_theme;
-            // ...existing code...
+            // All display values prefer the question's own (editable) fields.
+            const correctAnswerText = getCorrectAnswerText(q);
+            const rationale = q.rationale ?? raw?.answer_rationale?.correct_answer_explanation ?? "—";
+            const bloomsLevel = q.bloomLevel ?? raw?.blooms_level;
+            const learningObjective = q.learningOutcome || raw?.reasoning?.learning_objective_alignment || "—";
+            const courseName = q.courseName || raw?.course_name || "—";
+            const kcmTheme = q.competency || raw?.reasoning?.competency_alignment?.kcm?.competency_theme || "—";
+            const relevance = q.relevance ?? q.bloomPercent ?? 0;
             const colors = bloomColors[q.bloomLevel] ?? bloomColors["Remember"];
             const isExpanded = expandedQuestions.includes(q.id);
-            const isEditing = editingQuestionId === q.id;
-            const currentData = isEditing && editForm ? editForm : q;
+            const currentData = q;
             const isMTF = currentData.type === "MTF";
+            const isDragging = draggingIndex === qIndex;
+            const isDropTarget = dragOverIndex === qIndex && draggingIndex !== qIndex;
+            const dropFromAbove = isDropTarget && draggingIndex !== null && draggingIndex < qIndex;
+
             return (
-              <div key={q.id} className="group">
+              <div
+                key={q.id}
+                className={cn(
+                  "group transition-opacity",
+                  isDragging && "opacity-40",
+                  isDropTarget && (dropFromAbove
+                    ? "border-b-2 border-b-primary"
+                    : "border-t-2 border-t-primary")
+                )}
+                onDragOver={(e) => handleDragOver(e, qIndex)}
+                onDrop={(e) => handleDrop(e, qIndex)}
+              >
                 {/* Question Header */}
                 <div
                   className={cn(
-                    "w-full flex items-left gap-4 p-4 text-left transition-colors",
+                    "w-full flex items-center gap-3 p-4 text-left transition-colors",
                     isExpanded ? colors.light : "hover:bg-muted/30"
                   )}
                 >
+                  {/* Drag handle — also keyboard-operable with arrow keys */}
+                  <div
+                    draggable
+                    onDragStart={() => handleDragStart(qIndex)}
+                    onDragEnd={handleDragEnd}
+                    className="shrink-0 self-stretch flex items-center"
+                  >
+                    <button
+                      data-grip-index={qIndex}
+                      onKeyDown={(e) => handleGripKeyDown(e, qIndex)}
+                      aria-label={`Reorder question ${position} of ${questions.length}. Use arrow keys to move.`}
+                      title="Drag to reorder, or focus and use ↑ ↓"
+                      className="w-7 h-9 flex items-center justify-center rounded-md border border-border bg-white/70 text-muted-foreground cursor-grab active:cursor-grabbing hover:border-primary hover:text-primary transition-colors"
+                    >
+                      <GripVertical className="w-4 h-4" />
+                    </button>
+                  </div>
+
                   <button
                     onClick={() => toggleQuestion(q.id)}
                     className={cn(
@@ -532,11 +871,11 @@ console.log(
                       colors?.bg
                     )}
                   >
-                    {q.id}
+                    {position}
                   </button>
                   <div className="flex justify-between items-center w-full">
                     <div className="flex flex-col">
-                      <div className="flex-1 min-w-0" onClick={() => !isEditing && toggleQuestion(q.id)}>
+                      <div className="flex-1 min-w-0" onClick={() => toggleQuestion(q.id)}>
                         <div className="flex items-center gap-2 mb-1">
                           <Badge variant="outline" className="text-xs font-normal">
                             {q.type === "TRUEFALSE"
@@ -549,41 +888,40 @@ console.log(
                           <Badge className={cn("text-xs", colors.light, colors.text, colors.border, "border")}>
                             {q.bloomLevel} • {q.bloomPercent}%
                           </Badge>
+
+                          <span className="text-xs text-muted-foreground">
+                            Relevance {relevance}%
+                          </span>
                         </div>
-                        {isEditing ? (
-                          <Textarea
-                            value={editForm?.question || ""}
-                            onChange={(e) => updateEditForm("question", e.target.value)}
-                            className="text-sm bg-white border-primary/30 focus:border-primary min-h-[60px]"
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                        ) : (
-                          <p className={cn(
-                            "text-sm text-foreground cursor-pointer",
-                            !isExpanded && "line-clamp-1"
-                          )}>{q.question}</p>
-                        )}
+                        <p className={cn(
+                          "text-sm text-foreground cursor-pointer",
+                          !isExpanded && "line-clamp-1"
+                        )}>{q.question}</p>
                       </div>
                     </div>
-                    <div className="flex items-right gap-2 shrink-0 ">
-                      {isEditing ? (
-                        <>
-                          <button
-                            onClick={saveEditing}
-                            className="w-8 h-8 rounded-full bg-accent text-white flex items-center justify-center hover:bg-primary/90 transition-colors"
-                          >
-                            <Save className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={cancelEditing}
-                            className="w-8 h-8 rounded-full bg-muted text-muted-foreground flex items-center justify-center hover:bg-muted/80 transition-colors"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        </>
-                      ) : (
-                        <></>
-                      )}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={(e) => { e.stopPropagation(); startEditing(q); }}
+                        className="h-8 gap-1.5"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                        Edit
+                      </Button>
+
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setPendingDelete(q); }}
+                        disabled={questions.length <= 1}
+                        aria-label={`Delete question ${position}`}
+                        title={questions.length <= 1
+                          ? "An assessment must keep at least one question"
+                          : "Delete question"}
+                        className="w-8 h-8 rounded-md flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/10 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+
                       <button
                         onClick={() => toggleQuestion(q.id)}
                         className={cn(
@@ -648,62 +986,26 @@ console.log(
                                 )}
                               >
                                 {/* OPTION LABEL */}
-                                {isEditing ? (
-                                  <button
-                                    onClick={() => {
-                                      if (!editForm) return;
-
-                                      if (Array.isArray(editForm.correctAnswer)) {
-                                        const exists = editForm.correctAnswer.includes(option.label);
-                                        const updated = exists
-                                          ? editForm.correctAnswer.filter(l => l !== option.label)
-                                          : [...editForm.correctAnswer, option.label];
-
-                                        updateEditForm("correctAnswer", updated as any);
-                                      } else {
-                                        updateEditForm("correctAnswer", option.label);
-                                      }
-                                    }}
-                                    className={cn(
-                                      "w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 transition-colors cursor-pointer",
-                                      isCorrect
-                                        ? "bg-accent text-white"
-                                        : "bg-muted text-muted-foreground hover:bg-primary/90 hover:text-white"
-                                    )}
-                                    title="Click to set as correct answer"
-                                  >
-                                    {option.label}
-                                  </button>
-                                ) : (
-                                  <div
-                                    className={cn(
-                                      "w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0",
-                                      isCorrect ? "bg-accent text-white" : "bg-muted text-muted-foreground"
-                                    )}
-                                  >
-                                    {option.label}
-                                  </div>
-                                )}
+                                <div
+                                  className={cn(
+                                    "w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0",
+                                    isCorrect ? "bg-accent text-white" : "bg-muted text-muted-foreground"
+                                  )}
+                                >
+                                  {option.label}
+                                </div>
 
                                 {/* OPTION TEXT */}
-                                {isEditing ? (
-                                  <Input
-                                    value={option.text}
-                                    onChange={(e) => updateOptionText(optIndex, e.target.value)}
-                                    className="text-sm flex-1 h-8 bg-white"
-                                  />
-                                ) : (
-                                  <span
-                                    className={cn(
-                                      "text-sm flex-1",
-                                      isCorrect ? "text-foreground font-medium" : "text-muted-foreground"
-                                    )}
-                                  >
-                                    {option.text}
-                                  </span>
-                                )}
+                                <span
+                                  className={cn(
+                                    "text-sm flex-1",
+                                    isCorrect ? "text-foreground font-medium" : "text-muted-foreground"
+                                  )}
+                                >
+                                  {option.text}
+                                </span>
 
-                                {isCorrect && !isEditing && (
+                                {isCorrect && (
                                   <CheckCircle className="w-4 h-4 text-accent shrink-0" />
                                 )}
                               </div>
@@ -725,41 +1027,13 @@ console.log(
                                 Correct Answer
                               </div>
 
-                              {isEditing ? (
-                                <Textarea
-                                  value={editForm?.correctAnswer || ""}
-                                  onChange={(e) => updateEditForm("correctAnswer", e.target.value)}
-                                  className="text-sm bg-white border-blue-300 focus:border-blue-500 min-h-[80px]"
-                                />
-                              ) : (
-                                <p className="text-sm text-blue-900">
-                                  {currentData.correctAnswer}
-                                </p>
-                              )}
+                              <p className="text-sm text-blue-900">
+                                {currentData.correctAnswer}
+                              </p>
                             </div>
                           </div>
                         </div>
                       }
-                      {/* Rationale */}
-                      {/* <div className="bg-white/80 rounded-lg p-4 border border-border">
-                        <div className="flex items-start gap-3">
-                          <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
-                            <Lightbulb className="w-4 h-4 text-amber-600" />
-                          </div>
-                          <div className="flex-1">
-                            <div className="text-xs font-medium text-muted-foreground mb-1">Rationale</div>
-                            {isEditing ? (
-                              <Textarea
-                                value={editForm?.rationale || ""}
-                                onChange={(e) => updateEditForm("rationale", e.target.value)}
-                                className="text-sm bg-white border-primary/30 focus:border-primary min-h-[80px]"
-                              />
-                            ) : (
-                              <p className="text-sm text-foreground">{currentData.rationale}</p>
-                            )}
-                          </div>
-                        </div>
-                      </div> */}
 
 
                       {/* justification section */}
@@ -826,6 +1100,22 @@ console.log(
                               </div>
                             </div>
                           </div>
+
+                          {/* Relevance to selected content */}
+                          <div className="pt-1">
+                            <div className="flex items-center justify-between mb-1.5">
+                              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                                Relevance to selected content
+                              </span>
+                              <span className="text-xs font-semibold text-accent">{relevance}%</span>
+                            </div>
+                            <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                              <div
+                                className="h-full rounded-full bg-primary transition-all"
+                                style={{ width: `${Math.min(100, Math.max(0, relevance))}%` }}
+                              />
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -836,10 +1126,18 @@ console.log(
           })}
         </div>
 
-        <div className="p-3 bg-muted/30 border-t border-border text-center">
+        <div className="p-3 bg-muted/30 border-t border-border flex items-center justify-center gap-3">
           <p className="text-xs text-muted-foreground">
-            Showing {questions.length} questions
+            Showing {questions.length} {questions.length === 1 ? "question" : "questions"}
           </p>
+          <span className="text-muted-foreground text-xs">·</span>
+          <button
+            onClick={startCreating}
+            className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+          >
+            <Plus className="w-3 h-3" />
+            Add question
+          </button>
         </div>
       </div>
 
@@ -933,6 +1231,67 @@ console.log(
       </div>
 
       {/* CSV Format Modal */}
+      <EditQuestionDialog
+        question={editingQuestion}
+        index={isCreating
+          ? questions.length + 1
+          : questions.findIndex(q => q.id === editingQuestionId) + 1}
+        mode={isCreating ? "create" : "edit"}
+        open={editingQuestionId !== null || isCreating}
+        onClose={cancelEditing}
+        onSave={saveEditing}
+        saving={isSaving}
+        onTypeChosen={(type) =>
+          setDraftQuestion(prev =>
+            prev ? createBlankQuestion(prev.id, type) : prev
+          )
+        }
+      />
+
+      {/* Delete confirmation */}
+      {pendingDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setPendingDelete(null)} />
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-q-title"
+            className="relative bg-white rounded-2xl shadow-xl w-full max-w-md p-6"
+          >
+            <h2 id="delete-q-title" className="text-lg font-semibold leading-none tracking-tight">
+              Delete question {questions.findIndex(q => q.id === pendingDelete.id) + 1}?
+            </h2>
+            <p className="text-sm text-muted-foreground mt-3">
+              This removes the question from the assessment and renumbers the ones after
+              it. The assessment will have {questions.length - 1}{" "}
+              {questions.length - 1 === 1 ? "question" : "questions"}.
+            </p>
+            {pendingDelete.question && (
+              <p className="text-sm text-foreground mt-3 p-3 bg-muted/50 rounded-lg border border-border line-clamp-3">
+                {pendingDelete.question}
+              </p>
+            )}
+            <div className="flex justify-end gap-2 mt-6">
+              <Button variant="outline" onClick={() => setPendingDelete(null)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={confirmDelete}
+                disabled={isSaving}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90 gap-2"
+              >
+                {isSaving ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Trash2 className="w-4 h-4" />
+                )}
+                {isSaving ? "Deleting…" : "Delete question"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showCsvModal && (
         <div className="fixed inset-[-16px] bg-black/50 z-50 flex items-center justify-center ">
           <div className="absolute inset-0 bg-black/50 " onClick={() => setShowCsvModal(false)} />

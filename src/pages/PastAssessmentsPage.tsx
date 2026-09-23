@@ -68,12 +68,12 @@ const handleView = (jobId : string) => {
       const mergedConfig = { ...historyConfig, ...statusConfig };
 
       const viewJobData = {
-        ...data,
         ...originalItem,
+        ...data,
         config: mergedConfig,
         metadata: {
-          ...(data?.metadata || {}),
           ...(originalItem?.metadata || {}),
+          ...(data?.metadata || {}),
           config: mergedConfig,
         },
       };
