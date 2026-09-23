@@ -144,7 +144,7 @@ const EditQuestionDialog = ({
           description: "A new question can have at most 5 options.",
           variant: "destructive",
         });
-        return d;
+        return d; 
       }
       const options = [
         ...d.options,
