@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
+import ContextualDocuments from "./ContextualDocuments";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
@@ -201,6 +202,29 @@ setAllThemeData(allThemeCategory);
 
   fetchCompetencyFramework();
 }, [assessmentType]);
+  const fetchTranscoderStats = async (courseId: string) => {
+    if (!courseId) return;
+
+    try {
+      const response = await fetch(
+        `/apis/proxies/v8/extended/content/v1/read/${courseId}`,
+        {
+          method: "GET",
+          headers: {
+            accept: "application/json, text/plain, */*",
+          },
+        }
+      );
+
+      if (!response.ok) throw new Error("Failed to fetch content details");
+
+      const data = await response.json();
+      console.log("Content Details:", data);
+    } catch (error) {
+      console.error("Content Details fetch error:", error);
+    }
+  };
+
   const handleCourseSelect = (value: string) => {
     const selectedCourse = availableCourseIds.find(c => c.value === value);
     const courseName = selectedCourse?.label || value;
@@ -212,6 +236,7 @@ setAllThemeData(allThemeCategory);
       setCourseNameMap({ [value]: courseName });
       setCourseSearchOpen(false);
       fetchLearningOutcomes(value);
+      fetchTranscoderStats(value);
     } else {
       const filtered = courseIds.filter(id => id !== "NA");
       if (filtered.includes(value)) {
@@ -228,6 +253,7 @@ setAllThemeData(allThemeCategory);
         // Update mapping - add new course
         setCourseNameMap(prev => ({ ...prev, [value]: courseName }));
         onCourseNamesChange(newIds.map(id => (id === value ? courseName : (courseNameMap[id] || availableCourseIds.find(c => c.value === id)?.label || id))));
+        fetchTranscoderStats(value);
       }
     }
   };
@@ -890,6 +916,14 @@ const toggleSubTheme = (subTheme: any) => {
         </div>
       )}
 
+
+      {/* Contextual documents and VTT availability per selected course */}
+      {assessmentType !== "standalone" && assessmentType !== "Competency" && (
+        <ContextualDocuments
+          courseIds={courseIds}
+          courseNameMap={courseNameMap}
+        />
+      )}
 
       {/* Course Weightage */}
       {assessmentType === "comprehensive" && courseIds.length > 1 && (
