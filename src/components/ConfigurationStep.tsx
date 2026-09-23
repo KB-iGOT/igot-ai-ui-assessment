@@ -39,6 +39,9 @@ interface ConfigurationStepProps {
   isGenerating: boolean;
 }
 
+const MAX_QUESTIONS_PER_TYPE = 25;
+const MAX_TOTAL_QUESTIONS = 125; // 5 question types × 25 each
+
 const assessmentLevels = [
   { id: "beginner", name: "Beginner" },
   { id: "intermediate", name: "Intermediate" },
@@ -85,7 +88,7 @@ const ConfigurationStep = ({
           return { ...qt, enabled: false };
         }
 
-        const remaining = 25 - currentTotal;
+        const remaining = Math.min(MAX_QUESTIONS_PER_TYPE, MAX_TOTAL_QUESTIONS - currentTotal);
 
         return {
           ...qt,
@@ -102,7 +105,10 @@ const ConfigurationStep = ({
       .filter((qt) => qt.enabled && qt.id !== id)
       .reduce((sum, qt) => sum + qt.count, 0);
 
-    const maxAllowedForCurrent = 25 - otherQuestionsTotal;
+    const maxAllowedForCurrent = Math.min(
+      MAX_QUESTIONS_PER_TYPE,
+      MAX_TOTAL_QUESTIONS - otherQuestionsTotal
+    );
 
     onQuestionTypesChange(
       questionTypes.map((qt) =>
@@ -185,7 +191,7 @@ const ConfigurationStep = ({
               </svg>
             </Tooltip> */}
             </div>
-            <Badge variant="secondary" className="text-xs">{totalQuestions} total</Badge>
+            <Badge variant="secondary" className="text-xs">{totalQuestions} / {MAX_TOTAL_QUESTIONS} total</Badge>
           </div>
 
           <div className="space-y-2">
@@ -225,7 +231,7 @@ const ConfigurationStep = ({
                   <Input
                     type="number"
                     min="1"
-                    max={25}
+                    max={MAX_QUESTIONS_PER_TYPE}
                     value={qt.count}
                     onChange={(e) => {
                       updateQuestionCount(qt.id, parseInt(e.target.value) || 1);
