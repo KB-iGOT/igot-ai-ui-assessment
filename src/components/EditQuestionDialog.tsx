@@ -484,6 +484,7 @@ const EditQuestionDialog = ({
           {/* Rationale */}
           <div>
             <label className="text-sm font-medium text-foreground">Rationale</label>
+            <span className="text-destructive">*</span>
             <Textarea
               value={draft.rationale ?? ""}
               onChange={(e) => set("rationale", e.target.value)}
@@ -509,7 +510,7 @@ const EditQuestionDialog = ({
                   onValueChange={(v) => set("type", v)}
                   // While creating, type is owned by the picker — changing it
                   // here would leave the answer shape inconsistent.
-                  disabled={isCreate}
+                  disabled
                 >
                   <SelectTrigger className="mt-2">
                     <SelectValue />
