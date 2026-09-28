@@ -40,12 +40,12 @@ export interface Question {
   /** Relevance to selected content, 0-100. */
   relevance?: number;
   learningOutcome?: string;
-  /** KCM competency theme — the only third of the triple the editor exposes. */
+  /** KCM competency theme. */
   competency?: string;
   /**
-   * The other two thirds. Not editable in the UI, but carried so an edit to
-   * the theme can send the whole triple: the API validates area, theme and
-   * sub-theme as all-or-nothing and rejects a request that moves only one.
+   * The other two thirds of the KCM triple, all edited together in
+   * CompetencyPicker: the API validates area, theme and sub-theme as
+   * all-or-nothing and rejects a request that moves only one.
    */
   competencyArea?: string;
   competencySubTheme?: string;

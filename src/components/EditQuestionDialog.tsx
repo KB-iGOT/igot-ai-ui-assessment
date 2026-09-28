@@ -13,6 +13,7 @@ import {
 import { ArrowLeft, ArrowRight, Loader2, Pencil, Plus, Save, Target, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
+import CompetencyPicker from "./CompetencyPicker";
 import type { Question, QuestionOption } from "./question-types";
 import {
   BLOOM_LEVELS,
@@ -221,6 +222,14 @@ const EditQuestionDialog = ({
     const weight = Number(draft.bloomPercent);
     if (Number.isNaN(weight) || weight < 0 || weight > 100)
       return "Bloom weightage must be between 0 and 100.";
+    // The API takes the KCM triple all-or-nothing. Only checked when the
+    // reviewer touched it, so an untouched partial mapping doesn't block
+    // unrelated edits.
+    const kcm = [draft.competencyArea, draft.competency, draft.competencySubTheme];
+    const kcmBefore = [question?.competencyArea, question?.competency, question?.competencySubTheme];
+    const kcmChanged = kcm.some((v, i) => (v ?? "") !== (kcmBefore[i] ?? ""));
+    if (kcmChanged && kcm.some(Boolean) && !kcm.every(Boolean))
+      return "Select a competency area, theme and sub-theme, or reset all three.";
     return null;
   };
 
@@ -596,14 +605,31 @@ const EditQuestionDialog = ({
                 />
               </div>
 
-              <div>
-                <label className="text-sm text-foreground">Competency (KCM)</label>
-                <Input
-                  value={draft.competency ?? ""}
-                  onChange={(e) => set("competency", e.target.value)}
-                  className="mt-2 text-sm"
-                  placeholder="e.g. Data Management"
-                />
+              <div className="col-span-2 border-t border-border pt-4">
+                <label className="text-sm font-semibold text-foreground">
+                  Competencies (KCM)
+                </label>
+                <div className="mt-3">
+                  <CompetencyPicker
+                    value={{
+                      area: draft.competencyArea ?? "",
+                      theme: draft.competency ?? "",
+                      subTheme: draft.competencySubTheme ?? "",
+                    }}
+                    onChange={({ area, theme, subTheme }) =>
+                      setDraft((d) =>
+                        d
+                          ? {
+                              ...d,
+                              competencyArea: area,
+                              competency: theme,
+                              competencySubTheme: subTheme,
+                            }
+                          : d
+                      )
+                    }
+                  />
+                </div>
               </div>
 
               <div className="col-span-2">
