@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
@@ -22,6 +22,15 @@ import {
   letterFor,
   typeLabel,
 } from "./question-types";
+
+/** How a fill-in-the-blank gap is written in the question text. */
+export const BLANK = "_____";
+
+/** A run of three or more underscores counts as one blank. */
+export const countBlanks = (text: string) => (text.match(/_{3,}/g) ?? []).length;
+
+/** Assessment guideline: no more than two blanks in one item. */
+const MAX_BLANKS = 2;
 
 interface EditQuestionDialogProps {
   question: Question | null;
@@ -59,6 +68,10 @@ const EditQuestionDialog = ({
   const [draft, setDraft] = useState<Question | null>(null);
   // Create mode opens on the type picker; editing goes straight to the form.
   const [typeChosen, setTypeChosen] = useState(false);
+  const questionRef = useRef<HTMLTextAreaElement>(null);
+  // An untouched textarea reports its cursor at 0, which would put a blank
+  // at the start. Until the reviewer places the cursor, blanks are appended.
+  const caretPlaced = useRef(false);
 
   // Reset the draft whenever a different question is opened.
   useEffect(() => {
@@ -73,6 +86,7 @@ const EditQuestionDialog = ({
     }
     if (!open) {
       setDraft(null);
+      caretPlaced.current = false;
       setTypeChosen(false);
     }
   }, [open, question]);
@@ -87,7 +101,9 @@ const EditQuestionDialog = ({
 
   const isMTF = draft?.type === "MTF";
   const isMulti = draft?.type === "MULTICHOICE";
-  const isTextAnswer = draft?.type === "FTB" || draft?.type === "TRUEFALSE";
+  const isFTB = draft?.type === "FTB";
+  const isTextAnswer = isFTB || draft?.type === "TRUEFALSE";
+  const blankCount = isFTB ? countBlanks(draft.question) : 0;
   const hasOptions = !isTextAnswer && !!draft;
 
   const correctLabels = useMemo(() => {
@@ -133,16 +149,50 @@ const EditQuestionDialog = ({
       return { ...d, options };
     });
 
+  /**
+   * Inserts a blank at the cursor (or over the selection) — appended if the
+   * reviewer hasn't placed the cursor yet — padded with spaces so it doesn't
+   * fuse with adjacent words, then puts the cursor after it.
+   */
+  const addBlank = () => {
+    if (countBlanks(draft.question) >= MAX_BLANKS) {
+      toast({
+        title: "Maximum blanks reached",
+        description: `A fill in the blank question can have at most ${MAX_BLANKS} blanks.`,
+        variant: "destructive",
+      });
+      return;
+    }
+    const text = draft.question;
+    const el = questionRef.current;
+    const useCaret = caretPlaced.current && el;
+    const start = useCaret ? el.selectionStart : text.length;
+    const end = useCaret ? el.selectionEnd : text.length;
+    const before = text.slice(0, start);
+    const after = text.slice(end);
+    // Space only against a word — "is _____." not "is _____ ."
+    const insert =
+      (/\w$/.test(before) ? " " : "") + BLANK + (/^\w/.test(after) ? " " : "");
+    set("question", before + insert + after);
+
+    const caret = before.length + insert.length;
+    caretPlaced.current = true;
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(caret, caret);
+    });
+  };
+
   const addOption = () => {
     setDraft((d) => {
       if (!d) return d;
       // The five-option ceiling applies only to authoring a NEW question.
       // Editing an existing one has no ceiling, deliberately, so a generated
       // question that already carries more options stays editable.
-      if (mode === "create" && d.options.length >= 5) {
+      if (d.options.length >= 5) {
         toast({
           title: "Maximum options reached",
-          description: "A new question can have at most 5 options.",
+          description: "Question can have at most 5 options.",
           variant: "destructive",
         });
         return d; 
@@ -353,16 +403,44 @@ const EditQuestionDialog = ({
         <div className="px-6 pb-2 overflow-y-auto flex-1 space-y-5">
           {/* Question text */}
           <div>
-            <label className="text-sm font-medium text-foreground">
-              Question text
-            </label>
-            <span className="text-destructive">*</span>
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-sm font-medium text-foreground">
+                  Question text
+                </label>
+                <span className="text-destructive">*</span>
+              </div>
+              {isFTB && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={addBlank}
+                  title="Insert a blank at the cursor"
+                  className="h-8 gap-1.5"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Add blank
+                </Button>
+              )}
+            </div>
             <Textarea
+              ref={questionRef}
               value={draft.question}
               onChange={(e) => set("question", e.target.value)}
+              onSelect={() => (caretPlaced.current = true)}
               className="mt-2 min-h-[90px] text-sm"
-              placeholder="Enter the question"
+              placeholder={
+                isFTB
+                  ? "Enter the question, then use “Add blank” where the answer goes"
+                  : "Enter the question"
+              }
             />
+            {isFTB && (
+              <p className="text-xs text-muted-foreground mt-1.5">
+                No. of blanks added = {blankCount}
+              </p>
+            )}
           </div>
 
           {/* Options */}
