@@ -52,6 +52,10 @@ const MESSAGES: Record<string, (p: Params) => string> = {
   pair_right_required: (p) => `Pair ${p.pair_position} is missing its right item.`,
   pair_malformed: (p) => `Pair ${p.pair_position} is not in the expected format.`,
 
+  // Rationale
+  rationale_required: () =>
+    "Rationale field is required.",
+
   // Mapping and quality
   blooms_level_invalid: (p) =>
     `"${p.found}" is not a Bloom's level. Choose one of: ${list(p.allowed)}.`,
