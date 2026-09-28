@@ -356,6 +356,7 @@ const EditQuestionDialog = ({
             <label className="text-sm font-medium text-foreground">
               Question text
             </label>
+            <span className="text-destructive">*</span>
             <Textarea
               value={draft.question}
               onChange={(e) => set("question", e.target.value)}
@@ -370,6 +371,7 @@ const EditQuestionDialog = ({
               <div className="flex items-center justify-between mb-2">
                 <label className="text-sm font-medium text-foreground">
                   Options{" "}
+                  <span className="text-destructive">*</span>
                   {!isMTF && (
                     <span className="font-normal text-muted-foreground">
                       — click a letter to mark the correct answer
@@ -377,6 +379,7 @@ const EditQuestionDialog = ({
                     </span>
                   )}
                 </label>
+                
                 <Button
                   variant="outline"
                   size="sm"
