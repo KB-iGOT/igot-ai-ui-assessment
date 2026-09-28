@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import EditQuestionDialog from "./EditQuestionDialog";
+import EditQuestionDialog, { countBlanks } from "./EditQuestionDialog";
 import type { KcmFramework } from "./kcm-framework";
 import type { Question } from "./question-types";
 
@@ -182,6 +182,78 @@ describe("EditQuestionDialog competency mapping", () => {
     expect(toastMock).not.toHaveBeenCalled();
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({ question: "What is 3 + 3?", competencySubTheme: "" })
+    );
+  });
+});
+
+describe("EditQuestionDialog fill in the blank", () => {
+  const FTB: Partial<Question> = {
+    type: "FTB",
+    options: [],
+    correctAnswer: "Delhi",
+    question: "The capital of India is",
+  };
+  const questionBox = () =>
+    screen.getByPlaceholderText(/Enter the question/) as HTMLTextAreaElement;
+  const addBlank = () => fireEvent.click(screen.getByRole("button", { name: /Add blank/ }));
+
+  beforeEach(() => toastMock.mockClear());
+
+  it("counts runs of three or more underscores as blanks", () => {
+    expect(countBlanks("no blanks here")).toBe(0);
+    expect(countBlanks("a __ b")).toBe(0);
+    expect(countBlanks("___ and _____ and ________")).toBe(3);
+  });
+
+  it("shows the Add blank button and count only for FTB questions", () => {
+    renderDialog();
+    expect(screen.queryByRole("button", { name: /Add blank/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/No. of blanks added/)).not.toBeInTheDocument();
+  });
+
+  it("appends a blank, spaced from the text, when there's no cursor position", () => {
+    renderDialog(FTB);
+    expect(screen.getByText("No. of blanks added = 0")).toBeInTheDocument();
+    addBlank();
+    expect(questionBox()).toHaveValue("The capital of India is _____");
+    expect(screen.getByText("No. of blanks added = 1")).toBeInTheDocument();
+  });
+
+  it("inserts the blank at the cursor", () => {
+    renderDialog({ ...FTB, question: "The capital is Delhi." });
+    const box = questionBox();
+    box.setSelectionRange(15, 15); // before "Delhi"
+    fireEvent.select(box);
+    addBlank();
+    expect(box).toHaveValue("The capital is _____ Delhi.");
+  });
+
+  it("replaces selected text with the blank", () => {
+    renderDialog({ ...FTB, question: "The capital is Delhi." });
+    const box = questionBox();
+    box.setSelectionRange(15, 20); // "Delhi"
+    fireEvent.select(box);
+    addBlank();
+    expect(box).toHaveValue("The capital is _____.");
+  });
+
+  it("stops at two blanks", () => {
+    renderDialog(FTB);
+    addBlank();
+    addBlank();
+    addBlank();
+    expect(countBlanks(questionBox().value)).toBe(2);
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Maximum blanks reached" })
+    );
+  });
+
+  it("saves the question with its blank", () => {
+    const onSave = renderDialog(FTB);
+    addBlank();
+    save();
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ question: "The capital of India is _____" })
     );
   });
 });
