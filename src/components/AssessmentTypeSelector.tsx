@@ -46,6 +46,14 @@ const assessmentTypes = [
   }
 ];
 
+/**
+ * Maps a saved assessment type onto the selector's id. The API stores types
+ * lowercased ("competency"), but the ids aren't all lowercase ("Competency"),
+ * and every type check compares against the id.
+ */
+export const toAssessmentTypeId = (type: string) =>
+  assessmentTypes.find((t) => t.id.toLowerCase() === type.trim().toLowerCase())?.id ?? type;
+
 const AssessmentTypeSelector = ({ selected, onSelect, currentStep }: AssessmentTypeSelectorProps) => {
   return (
     <div className="flex gap-3">

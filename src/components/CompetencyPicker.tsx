@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Loader2, RotateCw, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "./ui/input";
-import { sameName, useKcmFramework, type KcmTerm } from "./kcm-framework";
+import { resolveKcm, sameName, useKcmFramework, type KcmTerm } from "./kcm-framework";
 
 /** Domain isn't picked from the framework — its theme and sub-theme are typed. */
 const DOMAIN = "Domain";
@@ -104,8 +104,13 @@ const ChipLevel = ({
  * Functional), one theme within it, one sub-theme within that theme. Changing
  * a level clears the levels below it, since they no longer belong to it.
  */
-const CompetencyPicker = ({ value, onChange }: CompetencyPickerProps) => {
+const CompetencyPicker = ({ value: stored, onChange }: CompetencyPickerProps) => {
   const { framework, loading, error } = useKcmFramework();
+
+  // Show the stored mapping in the framework's own terms. It's only written
+  // back when the reviewer changes something, so opening the editor alone
+  // doesn't count as a KCM edit.
+  const value = framework ? resolveKcm(framework, stored) : stored;
 
   const isDomain = sameName(value.area, DOMAIN);
   const area = framework?.areas.find((a) => sameName(a.name, value.area));

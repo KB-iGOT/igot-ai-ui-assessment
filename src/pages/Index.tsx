@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import Header from "@/components/Header";
-import AssessmentTypeSelector from "@/components/AssessmentTypeSelector";
+import AssessmentTypeSelector, { toAssessmentTypeId } from "@/components/AssessmentTypeSelector";
 import StepNavigation from "@/components/StepNavigation";
 import ContentInputStep from "@/components/ContentInputStep";
 import ConfigurationStep, { QuestionTypeConfig } from "@/components/ConfigurationStep";
@@ -219,15 +219,33 @@ const Index = ({userDetails}) => {
     // Restore fields needed for regenerate
     const config = getConfigFromViewData(viewJobData);
 
-    if (viewJobData.course_names?.length) {
-      setCourseNames(viewJobData.course_names);
-    }
+    // The job's top-level `course_id` is a job key, not always a course: a
+    // course-less job (competency, standalone) stores `custom_upload_<…>`
+    // there. Looking that up as a course 404s, so the contextual documents
+    // panel failed for every past assessment. The real ids live in the
+    // metadata/config lists, so prefer those.
+    const toIdList = (value: any): string[] =>
+      (typeof value === "string" ? value.split(",") : Array.isArray(value) ? value : [])
+        .map((id: any) => String(id ?? "").trim())
+        .filter((id: string) => id && id !== "NA" && !id.startsWith("custom_upload_"));
+    const idSources: [any, any][] = [
+      [viewJobData.metadata?.course_ids, viewJobData.metadata?.course_names],
+      [config.course_ids, config.course_names],
+      [viewJobData.course_id, viewJobData.course_names],
+    ];
+    const [restoredIds, restoredNames] =
+      idSources
+        .map(([ids, names]) => [toIdList(ids), names] as const)
+        .find(([ids]) => ids.length > 0) ?? [[], undefined];
 
-    if (viewJobData.course_id) {
-      setCourseIds(Array.isArray(viewJobData.course_id) ? viewJobData.course_id : [viewJobData.course_id]);
-    } else if (config.course_ids) {
-      const ids = typeof config.course_ids === "string" ? config.course_ids.split(",") : config.course_ids;
-      setCourseIds(ids);
+    const toNames = (value: any): string[] =>
+      typeof value === "string" ? value.split(",").map((n) => n.trim()) : Array.isArray(value) ? value : [];
+    if (restoredIds.length) {
+      setCourseIds(restoredIds);
+      const names = toNames(restoredNames).length
+        ? toNames(restoredNames)
+        : toNames(viewJobData.course_names);
+      if (names.length) setCourseNames(names);
     }
 
     const rawTopicNames = viewJobData.topic_names ?? config.topic_names;
@@ -236,7 +254,20 @@ const Index = ({userDetails}) => {
       setTopics(Array.isArray(parsed) ? parsed : []);
     }
 
-    if (config.assessment_type) setAssessmentType(config.assessment_type);
+    if (config.assessment_type) setAssessmentType(toAssessmentTypeId(config.assessment_type));
+
+    // Competency selections are saved as names. ContentInputStep swaps them
+    // for framework terms once the framework loads; until then `name` alone
+    // is enough to regenerate.
+    const toNameList = (value: any): string[] => {
+      const list = typeof value === "string" ? [value] : Array.isArray(value) ? value : [];
+      return list.filter((v) => typeof v === "string" && v.trim());
+    };
+    if (typeof config.competency_area === "string" && config.competency_area) {
+      setCompetencyArea(config.competency_area);
+    }
+    setCompetencyThemes(toNameList(config.competency_themes).map((name) => ({ name })));
+    setCompetencySubThemes(toNameList(config.competency_sub_themes).map((name) => ({ name })));
     if (config.difficulty) setAssessmentLevel(config.difficulty);
     if (config.language) setLanguage(config.language.charAt(0).toUpperCase() + config.language.slice(1));
     const timeLimitValue = config.time_limit ?? viewJobData.time_limit;
