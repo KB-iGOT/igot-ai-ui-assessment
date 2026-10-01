@@ -115,6 +115,49 @@ export const useKcmFramework = (enabled = true) => {
   return { framework, loading: enabled && !framework && !error, error };
 };
 
-/** Case- and whitespace-insensitive name match; stored values are names. */
-export const sameName = (a?: string, b?: string) =>
-  (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
+/**
+ * Comparison key for a KCM name. AI-generated mappings don't always spell
+ * names exactly as the framework does ("Behavioral", "Behavioural Competency",
+ * "Diversity and Inclusion"), so ignore case, spacing, punctuation, the US
+ * spelling and a trailing "competency"/"competencies".
+ */
+const nameKey = (s?: string) =>
+  (s ?? "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/behavioral/g, "behavioural")
+    .replace(/\bcompetenc(y|ies)\b/g, "")
+    .replace(/[^a-z0-9]/g, "");
+
+/** Loose name match; stored values are names. */
+export const sameName = (a?: string, b?: string) => nameKey(a) === nameKey(b);
+
+export interface KcmValue {
+  area: string;
+  theme: string;
+  subTheme: string;
+}
+
+/**
+ * Maps a stored KCM triple onto the framework's own terms, so each level that
+ * matches carries the framework's spelling. When the area is missing or not
+ * recognised, it is inferred from the theme. Levels that don't match are
+ * returned unchanged. Domain is typed, not picked, so it's left alone.
+ */
+export const resolveKcm = (framework: KcmFramework, value: KcmValue): KcmValue => {
+  if (sameName(value.area, "Domain")) return value;
+  const area =
+    framework.areas.find((a) => sameName(a.name, value.area)) ??
+    (value.theme.trim()
+      ? framework.areas.find((a) => a.themes.some((t) => sameName(t.name, value.theme)))
+      : undefined);
+  const theme = area?.themes.find((t) => sameName(t.name, value.theme));
+  const subTheme = theme
+    ? framework.subThemesByTheme[theme.identifier]?.find((s) => sameName(s.name, value.subTheme))
+    : undefined;
+  return {
+    area: area?.name ?? value.area,
+    theme: theme?.name ?? value.theme,
+    subTheme: subTheme?.name ?? value.subTheme,
+  };
+};

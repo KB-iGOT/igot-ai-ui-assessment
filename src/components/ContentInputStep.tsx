@@ -21,6 +21,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import Tooltip from "@mui/material/Tooltip";
 import { COMPETENCY_OPTIONS, SUB_THEME_MAP, SUB_THEME_OPTIONS, THEME_OPTIONS } from "./Constant";
 import { ACCESS_TOKEN_2 } from "./ConstantAPI";
+import { sameName } from "./kcm-framework";
 
 interface ContentInputStepProps {
   assessmentType: string;
@@ -153,6 +154,39 @@ useEffect(() => {
   }
 }, []);
 
+const byName = (a: any, b: any) => a.name.localeCompare(b.name);
+
+/**
+ * The theme and sub-theme option lists are local state, filled only when an
+ * area is clicked, so they're empty whenever this step mounts with a
+ * selection already made (a past assessment opened from history, or coming
+ * back from a later step). Rebuild them from the framework, and swap any
+ * selection that is only a saved name for its framework term, so the
+ * identifier-based checks match it.
+ */
+const restoreCompetencySelection = (areas: any[], themeCategory: any[]) => {
+  const area = areas.find((a: any) => sameName(a.name, selectedCompetency ?? ""));
+  if (!area) return;
+  onCompetencyChange(area.name);
+
+  const resolve = (terms: any[], picked: any[]) =>
+    picked.map(
+      (p: any) =>
+        terms.find((t: any) => (p.identifier && t.identifier === p.identifier) || sameName(t.name, p.name)) ?? p
+    );
+
+  const themeTerms = [...(area.associations || [])].sort(byName);
+  setAllThemes(themeTerms);
+  const themes = resolve(themeTerms, selectedThemes);
+  onThemesChange(themes);
+
+  const subThemeTerms = themes
+    .flatMap((t: any) => themeCategory.find((c: any) => c.identifier === t.identifier)?.associations || [])
+    .sort(byName);
+  setAllSubThemes(subThemeTerms);
+  onSubThemesChange(resolve(subThemeTerms, selectedSubThemes));
+};
+
 useEffect(() => {
   const fetchCompetencyFramework = async () => {
     if (assessmentType !== "Competency") return;
@@ -194,6 +228,7 @@ useEffect(() => {
 
 console.log("ALL THEME CATEGORY", allThemeCategory);
 setAllThemeData(allThemeCategory);
+restoreCompetencySelection(competencyAreas, allThemeCategory);
 
     } catch (error) {
       console.error("Competency Framework fetch error:", error);

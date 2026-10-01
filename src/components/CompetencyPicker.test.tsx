@@ -172,6 +172,42 @@ describe("CompetencyPicker", () => {
     expect(chip("Knowledge Sharing")).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("matches AI-generated names that differ in spelling or wording", () => {
+    const { onChange } = renderPicker({
+      area: "Behavioral Competency",
+      theme: "collaboration",
+      subTheme: "Diversity and Inclusion",
+    });
+    expect(screen.getByRole("radio", { name: "Behavioural" })).toHaveAttribute("aria-checked", "true");
+    expect(chip("Collaboration")).toHaveAttribute("aria-pressed", "true");
+    expect(chip("Diversity & Inclusion")).toHaveAttribute("aria-pressed", "true");
+    // Opening alone isn't an edit.
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("infers the area from the theme when the area is missing", () => {
+    const { last } = renderPicker({ area: "", theme: "Budgeting", subTheme: "" });
+    expect(screen.getByRole("radio", { name: "Functional" })).toHaveAttribute("aria-checked", "true");
+    expect(chip("Budgeting")).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(chip("Forecasting"));
+    expect(last()).toEqual({ area: "Functional", theme: "Budgeting", subTheme: "Forecasting" });
+  });
+
+  it("writes framework spellings back once the reviewer edits", () => {
+    const { last } = renderPicker({
+      area: "behavioral",
+      theme: "COLLABORATION",
+      subTheme: "Diversity and Inclusion",
+    });
+    fireEvent.click(chip("Knowledge Sharing"));
+    expect(last()).toEqual({
+      area: "Behavioural",
+      theme: "Collaboration",
+      subTheme: "Knowledge Sharing",
+    });
+  });
+
   it("filters theme chips by search text", () => {
     renderPicker({ area: "Behavioural", theme: "", subTheme: "" });
     fireEvent.change(searchBoxes()[0], { target: { value: "comm" } });
