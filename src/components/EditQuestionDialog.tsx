@@ -30,7 +30,7 @@ export const BLANK = "_____";
 export const countBlanks = (text: string) => (text.match(/_{3,}/g) ?? []).length;
 
 /** Assessment guideline: no more than two blanks in one item. */
-const MAX_BLANKS = 2;
+const MAX_BLANKS = 1;
 
 interface EditQuestionDialogProps {
   question: Question | null;
