@@ -276,6 +276,52 @@ const buildFiles = async (
   );
 };
 
+export interface CourseContentResponse {
+  ok: boolean;
+  status: number;
+  content?: any;
+}
+
+const inFlightContentReads = new Map<string, Promise<CourseContentResponse>>();
+
+/**
+ * Reads one course from the extended content-read endpoint. Learning outcomes
+ * and contextual documents both need this response, so concurrent callers for
+ * the same course share a single request. The entry is dropped once settled,
+ * so a later selection or a retry always fetches fresh data.
+ *
+ * Deliberately takes no AbortSignal: one caller cancelling must not cancel
+ * the request for the other. Callers ignore the result once they are stale.
+ */
+export const fetchCourseContent = (courseId: string): Promise<CourseContentResponse> => {
+  const existing = inFlightContentReads.get(courseId);
+  if (existing) return existing;
+
+  const request = (async () => {
+    const res = await fetch(`/apis/proxies/v8/extended/content/v1/read/${courseId}`, {
+      method: "GET",
+      headers: { accept: "application/json, text/plain, */*" },
+    });
+    if (!res.ok) return { ok: false, status: res.status };
+    const data = await res.json();
+    return { ok: true, status: res.status, content: data?.result?.content };
+  })().finally(() => inFlightContentReads.delete(courseId));
+
+  inFlightContentReads.set(courseId, request);
+  return request;
+};
+
+/** Rejects with an AbortError as soon as `signal` aborts. */
+const raceAbort = <T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> => {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+};
+
 /**
  * Fetches document metadata for one course. Never throws — a failure is
  * returned as an "error" record so the caller can distinguish it from a
@@ -293,14 +339,7 @@ export const fetchCourseDocuments = async (
   }
 
   try {
-    const res = await fetch(
-      `/apis/proxies/v8/extended/content/v1/read/${courseId}`,
-      {
-        method: "GET",
-        headers: { accept: "application/json, text/plain, */*" },
-        signal,
-      }
-    );
+    const res = await raceAbort(fetchCourseContent(courseId), signal);
 
     if (!res.ok) {
       return {
@@ -312,8 +351,7 @@ export const fetchCourseDocuments = async (
       };
     }
 
-    const data = await res.json();
-    const content = data?.result?.content;
+    const content = res.content;
     const resources = extractResources(content);
     const files = await buildFiles(resources, signal);
 

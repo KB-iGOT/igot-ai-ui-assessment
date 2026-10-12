@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import ContextualDocuments from "./ContextualDocuments";
+import { fetchCourseContent } from "./contextual-documents";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
@@ -237,29 +238,8 @@ restoreCompetencySelection(competencyAreas, allThemeCategory);
 
   fetchCompetencyFramework();
 }, [assessmentType]);
-  const fetchTranscoderStats = async (courseId: string) => {
-    if (!courseId) return;
-
-    try {
-      const response = await fetch(
-        `/apis/proxies/v8/extended/content/v1/read/${courseId}`,
-        {
-          method: "GET",
-          headers: {
-            accept: "application/json, text/plain, */*",
-          },
-        }
-      );
-
-      if (!response.ok) throw new Error("Failed to fetch content details");
-
-      const data = await response.json();
-      console.log("Content Details:", data);
-    } catch (error) {
-      console.error("Content Details fetch error:", error);
-    }
-  };
-
+  // Learning outcomes and contextual documents are fetched by the effects
+  // that watch `courseIds`, so selecting a course only updates the selection.
   const handleCourseSelect = (value: string) => {
     const selectedCourse = availableCourseIds.find(c => c.value === value);
     const courseName = selectedCourse?.label || value;
@@ -270,8 +250,6 @@ restoreCompetencySelection(competencyAreas, allThemeCategory);
       // Update the mapping for persistent display
       setCourseNameMap({ [value]: courseName });
       setCourseSearchOpen(false);
-      fetchLearningOutcomes(value);
-      fetchTranscoderStats(value);
     } else {
       const filtered = courseIds.filter(id => id !== "NA");
       if (filtered.includes(value)) {
@@ -288,7 +266,6 @@ restoreCompetencySelection(competencyAreas, allThemeCategory);
         // Update mapping - add new course
         setCourseNameMap(prev => ({ ...prev, [value]: courseName }));
         onCourseNamesChange(newIds.map(id => (id === value ? courseName : (courseNameMap[id] || availableCourseIds.find(c => c.value === id)?.label || id))));
-        fetchTranscoderStats(value);
       }
     }
   };
@@ -579,27 +556,31 @@ const canProceed =
     }
   };
 
+  // Keyed on the selected ids rather than the array, so a parent re-render
+  // that passes an equal array does not refetch.
+  const learningOutcomeCourseKey = courseIds.filter((id) => id && id !== "NA").join(",");
+
   useEffect(() => {
-    if (courseIds.length === 0 || courseIds[0] === "NA") {
+    const ids = learningOutcomeCourseKey ? learningOutcomeCourseKey.split(",") : [];
+    if (!ids.length) {
       setLearningOutcomes([]);
       return;
     }
+    let stale = false;
     const fetchAll = async () => {
       try {
+        // Shares the extended-read request the Contextual documents panel
+        // makes for the same course, so each course is read once.
         const results = await Promise.all(
-          courseIds.map(async (courseId) => {
-            const response = await fetch(`/api/content/v1/read/${courseId}`, {
-              method: "GET",
-              headers: { "Content-Type": "application/json" },
-            });
+          ids.map(async (courseId) => {
+            const response = await fetchCourseContent(courseId);
             if (!response.ok) return [];
-            const data = await response.json();
-            const htmlInstructions = data?.result?.content?.instructions || "";
-            return parseLearningOutcomes(htmlInstructions);
+            return parseLearningOutcomes(response.content?.instructions || "");
           })
         );
-        setLearningOutcomes([...new Set(results.flat())]);
+        if (!stale) setLearningOutcomes([...new Set(results.flat())]);
       } catch (error) {
+        if (stale) return;
         console.error("Learning Outcomes fetch error:", error);
         toast({
           title: "Error",
@@ -609,7 +590,10 @@ const canProceed =
       }
     };
     fetchAll();
-  }, [courseIds, user?.access_token]);
+    return () => {
+      stale = true;
+    };
+  }, [learningOutcomeCourseKey]);
 
   const parseLearningOutcomes = (html: string): string[] => {
     const parser = new DOMParser();
@@ -620,44 +604,6 @@ const canProceed =
     return Array.from(elements)
       .map(el => el.textContent?.replace(/\s+/g, " ").trim())
       .filter(Boolean) as string[];
-  };
-
-  const fetchLearningOutcomes = async (courseId: string) => {
-    // if (!user?.access_token || !courseId) return;
-    if (!courseId) return;
-
-    try {
-      const response = await fetch(
-        `/api/content/v1/read/${courseId}`,
-        {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            // Authorization: `Bearer ${user.access_token}`,
-          },
-        }
-      );
-
-
-      if (!response.ok) throw new Error("Failed to fetch learning outcomes");
-
-      const data = await response.json();
-
-      const htmlInstructions = data?.result?.content?.instructions || "";
-
-      const outcomes = parseLearningOutcomes(htmlInstructions);
-
-      setLearningOutcomes(outcomes);
-
-    } catch (error) {
-      console.error("Learning Outcomes fetch error:", error);
-
-      toast({
-        title: "Error",
-        description: "Unable to load learning outcomes",
-        variant: "destructive",
-      });
-    }
   };
 
 
@@ -944,7 +890,7 @@ const toggleSubTheme = (subTheme: any) => {
             {learningOutcomes.map((outcome, index) => (
               <li key={index} className="flex items-start gap-2 text-xs text-foreground">
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" className="lucide lucide-check w-3.5 h-3.5 text-accent mt-0.5 shrink-0"><path d="M20 6 9 17l-5-5"></path></svg>
-                <span>{outcome}</span>
+                <span className="min-w-0 break-words">{outcome}</span>
               </li>
             ))}
           </ul>
