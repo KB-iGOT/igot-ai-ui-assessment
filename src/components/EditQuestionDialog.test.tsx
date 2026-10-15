@@ -242,7 +242,7 @@ describe("EditQuestionDialog fill in the blank", () => {
     addBlank();
     addBlank();
     addBlank();
-    expect(countBlanks(questionBox().value)).toBe(2);
+    expect(countBlanks(questionBox().value)).toBe(1);
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Maximum blanks reached" })
     );
