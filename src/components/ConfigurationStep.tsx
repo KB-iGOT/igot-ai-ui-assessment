@@ -39,8 +39,8 @@ interface ConfigurationStepProps {
   isGenerating: boolean;
 }
 
-const MAX_QUESTIONS_PER_TYPE = 25;
-const MAX_TOTAL_QUESTIONS = 125; // 5 question types × 25 each
+const MAX_QUESTIONS_PER_TYPE = 200;
+const MAX_TOTAL_QUESTIONS = 200; // 5 question types × 25 each
 
 const assessmentLevels = [
   { id: "beginner", name: "Beginner" },
@@ -236,7 +236,7 @@ const ConfigurationStep = ({
                     onChange={(e) => {
                       updateQuestionCount(qt.id, parseInt(e.target.value) || 1);
                     }}
-                    className="w-14 h-8 text-center text-sm"
+                    className="w-20 h-8 px-1 text-center text-sm"
                   />
                   )}
                 </div>
