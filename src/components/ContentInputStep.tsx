@@ -409,6 +409,8 @@ const canProceed =
       setCourseOffset(0);
       setHasMoreCourses(true);
       setAvailableCourseIds([]); // Clear previous results
+      const searchText = (courseQuery || "").trim();
+      const isCourseIdQuery = searchText.startsWith("do_");
 
       try {
         const response = await fetch(
@@ -425,6 +427,8 @@ const canProceed =
                   contentType: ["Course"],
                   courseCategory : ["Course"],
                   status: ["Live" , 'Draft'],
+                  // Searching by course do_ ID filters on identifier instead of text query
+                  ...(isCourseIdQuery && { identifier: [searchText] }),
                 },
                 fields: [
                   "identifier",
@@ -438,7 +442,7 @@ const canProceed =
                 facets: [
                  "status"
                 ],
-                query: courseQuery || "",
+                query: isCourseIdQuery ? "" : searchText,
                 limit: PAGE_LIMIT,
                 offset: 0,
                 sort_by: { createdOn: "desc" },
@@ -485,6 +489,8 @@ const canProceed =
 
   try {
     setIsCoursesLoading(true);
+    const searchText = (courseQuery || "").trim();
+    const isCourseIdQuery = searchText.startsWith("do_");
 
     const response = await fetch(
       "/apis/proxies/v8/sunbirdigot/v4/search",
@@ -500,6 +506,7 @@ const canProceed =
               contentType: ["Course"],
               courseCategory : ["Course"],
               status: ["Live" , 'Draft'],
+              ...(isCourseIdQuery && { identifier: [searchText] }),
             },
             fields: [
               "identifier",
@@ -513,7 +520,7 @@ const canProceed =
             facets: [
              "status"
             ],
-            query: courseQuery || "",
+            query: isCourseIdQuery ? "" : searchText,
               limit: PAGE_LIMIT,
               offset: reset ? 0 : courseOffset,
               sort_by: { createdOn: "desc" },
@@ -750,7 +757,8 @@ const toggleSubTheme = (subTheme: any) => {
                 overflow: "hidden",
               }}
             >
-              <Command>
+              {/* Search is server-side (name or do_ ID), so skip cmdk's label filtering */}
+              <Command shouldFilter={false}>
                 <CommandInput
                   placeholder="Search courses..."
                   className="h-10"
