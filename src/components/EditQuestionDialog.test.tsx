@@ -248,6 +248,24 @@ describe("EditQuestionDialog fill in the blank", () => {
     );
   });
 
+  it("edits an FTB with options like an MCQ, picking one answer", () => {
+    const onSave = renderDialog({
+      type: "FTB",
+      question: "The capital of India is _____",
+      options: [
+        { label: "A", text: "Mumbai", index: 0 },
+        { label: "B", text: "Delhi", index: 1 },
+        { label: "C", text: "Kolkata", index: 2 },
+        { label: "D", text: "Chennai", index: 3 },
+      ],
+      correctAnswer: "A",
+    });
+    expect(screen.queryByPlaceholderText("Enter the correct answer")).not.toBeInTheDocument();
+    fireEvent.click(screen.getAllByTitle("Mark as correct answer")[1]);
+    save();
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ correctAnswer: "B" }));
+  });
+
   it("saves the question with its blank", () => {
     const onSave = renderDialog(FTB);
     addBlank();

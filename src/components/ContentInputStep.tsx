@@ -315,13 +315,13 @@ setAllThemes(
   const handleTranscriptUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     const validFiles = files.filter(f =>
-      f.name.endsWith('.vtt') || f.name.endsWith('.txt')
+      /\.(vtt|txt|pdf|docx)$/i.test(f.name)
     );
 
     if (validFiles.length !== files.length) {
       toast({
         title: "Invalid File Type",
-        description: "Only VTT and TXT files are allowed.",
+        description: "Only VTT, TXT, PDF and DOCX files are allowed.",
         variant: "destructive",
       });
     }
@@ -334,7 +334,14 @@ setAllThemes(
   const handleMaterialUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     const validFiles = files.filter(f => {
-      if (!f.name.endsWith('.pdf')) return false;
+      if (!/\.(pdf|docx)$/i.test(f.name)) {
+        toast({
+          title: "Invalid File Type",
+          description: `${f.name} is not a PDF or DOCX file.`,
+          variant: "destructive",
+        });
+        return false;
+      }
       if (f.size > 25 * 1024 * 1024) {
         toast({
           title: "File Too Large",
@@ -1521,7 +1528,7 @@ const toggleSubTheme = (subTheme: any) => {
           <div className="flex items-center">
             <h3 className="text-sm font-medium text-foreground">Transcripts</h3>
             <Tooltip
-              title="Upload course transcripts in VTT or TXT format to help generate questions from lecture content."
+              title="Upload course transcripts in VTT, TXT, PDF or DOCX format to help generate questions from lecture content."
               arrow
               placement="top"
               componentsProps={{
@@ -1546,7 +1553,7 @@ const toggleSubTheme = (subTheme: any) => {
           </div>
 
 
-          <p className="text-xs text-muted-foreground mb-3">optional, VTT/TXT, max 10</p>
+          <p className="text-xs text-muted-foreground mb-3">optional, VTT/TXT/PDF/DOCX, max 10</p>
 
           <label className={cn(
             "flex flex-col items-center justify-center p-4 border border-dashed rounded-lg cursor-pointer transition-colors",
@@ -1556,7 +1563,7 @@ const toggleSubTheme = (subTheme: any) => {
             <span className="text-xs text-muted-foreground">{transcriptFiles.length}/10 files</span>
             <input
               type="file"
-              accept=".vtt,.txt"
+              accept=".vtt,.txt,.pdf,.docx"
               multiple
               onChange={handleTranscriptUpload}
               className="hidden"
@@ -1585,7 +1592,7 @@ const toggleSubTheme = (subTheme: any) => {
           <div className="flex items-center">
             <h3 className="text-sm font-medium text-foreground">Supporting Documents {assessmentType == 'standalone' && <span className="text-destructive">*</span>}</h3>
             <Tooltip
-              title="Upload additional PDFs or reference materials such as policy documents, scheme guidelines, circulars, case studies, etc. These help generate questions aligned with real policy contexts."
+              title="Upload additional PDF or DOCX reference materials such as policy documents, scheme guidelines, circulars, case studies, etc. These help generate questions aligned with real policy contexts."
               placement="top"
               componentsProps={{
                 tooltip: {
@@ -1607,7 +1614,7 @@ const toggleSubTheme = (subTheme: any) => {
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" className="lucide lucide-info w-4 h-4 text-muted-foreground cursor-help ml-3" data-state="closed"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>
             </Tooltip>
           </div>
-          <p className="text-xs text-muted-foreground mb-3">optional, PDF, max 3×25MB</p>
+          <p className="text-xs text-muted-foreground mb-3">optional, PDF/DOCX, max 3×25MB</p>
 
           <label className={cn(
             "flex flex-col items-center justify-center p-4 border border-dashed rounded-lg cursor-pointer transition-colors",
@@ -1617,7 +1624,7 @@ const toggleSubTheme = (subTheme: any) => {
             <span className="text-xs text-muted-foreground">{materialFiles.length}/3 files</span>
             <input
               type="file"
-              accept=".pdf"
+              accept=".pdf,.docx"
               multiple
               onChange={handleMaterialUpload}
               className="hidden"
