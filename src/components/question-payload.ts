@@ -12,6 +12,7 @@
  */
 
 import type { Question, QuestionOption } from "./question-types";
+import { isTextAnswer } from "./question-types";
 
 /** UI type -> the `questionType` the create endpoint expects. */
 export const apiQuestionType = (type: string): string =>
@@ -19,8 +20,6 @@ export const apiQuestionType = (type: string): string =>
 
 const isMTF = (q: Question) => q.type === "MTF";
 const isMulti = (q: Question) => q.type === "MULTICHOICE";
-const isTextAnswer = (q: Question) =>
-  q.type === "FTB" || q.type === "TRUEFALSE";
 const hasOptions = (q: Question) => !isMTF(q) && !isTextAnswer(q);
 
 const asLabels = (correctAnswer: Question["correctAnswer"]): string[] =>
