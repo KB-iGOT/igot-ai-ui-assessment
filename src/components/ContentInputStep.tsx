@@ -23,6 +23,7 @@ import Tooltip from "@mui/material/Tooltip";
 import { COMPETENCY_OPTIONS, SUB_THEME_MAP, SUB_THEME_OPTIONS, THEME_OPTIONS } from "./Constant";
 import { ACCESS_TOKEN_2 } from "./ConstantAPI";
 import { sameName } from "./kcm-framework";
+import { toAssessmentLevel } from "./assessment-level";
 
 interface ContentInputStepProps {
   assessmentType: string;
@@ -38,6 +39,11 @@ interface ContentInputStepProps {
   setLanguage: (language: string) => void;
   onCourseIdsChange: (ids: string[]) => void;
   onCourseNamesChange: (names: string[]) => void;
+  /**
+   * Receives the selected course's `difficultyLevel`, as the default
+   * assessment level. Single-course types only; comprehensive never calls it.
+   */
+  onAssessmentLevelChange: (level: string) => void;
   onTopicsChange: (topics: string[]) => void;
   onNotesChange: (notes: string) => void;
   onTranscriptFilesChange: (files: File[]) => void;
@@ -69,6 +75,7 @@ const ContentInputStep = ({
   setLanguage,
   onCourseIdsChange,
   onCourseNamesChange,
+  onAssessmentLevelChange,
   onTopicsChange,
   onNotesChange,
   onTranscriptFilesChange,
@@ -238,6 +245,29 @@ restoreCompetencySelection(competencyAreas, allThemeCategory);
 
   fetchCompetencyFramework();
 }, [assessmentType]);
+  // Only the latest selection may set the level, so a slow response for an
+  // earlier pick cannot overwrite the course chosen after it.
+  const latestLevelRequestRef = useRef(0);
+
+  /**
+   * Defaults the assessment level to the picked course's `difficultyLevel`.
+   * Runs on a user's pick rather than in an effect on `courseIds`: that
+   * effect also fires when this step remounts (Back from Configuration, or a
+   * restored past assessment), which would overwrite a level chosen by hand.
+   * Shares the in-flight read with the learning-outcomes effect.
+   */
+  const applyCourseDifficulty = async (courseId: string) => {
+    const requestId = ++latestLevelRequestRef.current;
+    try {
+      const response = await fetchCourseContent(courseId);
+      if (!response.ok || requestId !== latestLevelRequestRef.current) return;
+      onAssessmentLevelChange(toAssessmentLevel(response.content?.difficultyLevel));
+    } catch (error) {
+      // Leave the current level in place; learning outcomes reports the failure.
+      console.error("Course difficulty fetch error:", error);
+    }
+  };
+
   // Learning outcomes and contextual documents are fetched by the effects
   // that watch `courseIds`, so selecting a course only updates the selection.
   const handleCourseSelect = (value: string) => {
@@ -250,6 +280,7 @@ restoreCompetencySelection(competencyAreas, allThemeCategory);
       // Update the mapping for persistent display
       setCourseNameMap({ [value]: courseName });
       setCourseSearchOpen(false);
+      applyCourseDifficulty(value);
     } else {
       const filtered = courseIds.filter(id => id !== "NA");
       if (filtered.includes(value)) {
@@ -266,6 +297,8 @@ restoreCompetencySelection(competencyAreas, allThemeCategory);
         // Update mapping - add new course
         setCourseNameMap(prev => ({ ...prev, [value]: courseName }));
         onCourseNamesChange(newIds.map(id => (id === value ? courseName : (courseNameMap[id] || availableCourseIds.find(c => c.value === id)?.label || id))));
+        // No applyCourseDifficulty here: with several courses there is no
+        // single course level, so comprehensive keeps its beginner default.
       }
     }
   };
@@ -411,7 +444,6 @@ const canProceed =
       setAvailableCourseIds([]); // Clear previous results
       const searchText = (courseQuery || "").trim();
       const isCourseIdQuery = searchText.startsWith("do_");
-
       try {
         const response = await fetch(
           "/apis/proxies/v8/sunbirdigot/v4/search",
@@ -520,7 +552,7 @@ const canProceed =
             facets: [
              "status"
             ],
-            query: isCourseIdQuery ? "" : searchText,
+              query: isCourseIdQuery ? "" : searchText,
               limit: PAGE_LIMIT,
               offset: reset ? 0 : courseOffset,
               sort_by: { createdOn: "desc" },
@@ -757,7 +789,6 @@ const toggleSubTheme = (subTheme: any) => {
                 overflow: "hidden",
               }}
             >
-              {/* Search is server-side (name or do_ ID), so skip cmdk's label filtering */}
               <Command shouldFilter={false}>
                 <CommandInput
                   placeholder="Search courses..."
@@ -768,6 +799,7 @@ const toggleSubTheme = (subTheme: any) => {
                   }}
                 />
                 <CommandList
+                
                   className="max-h-[60vh] overflow-y-auto"
                   onScroll={(e) => {
                   const target = e.currentTarget;

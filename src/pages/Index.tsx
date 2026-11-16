@@ -12,6 +12,9 @@ import Tooltip from "@mui/material/Tooltip";
 import { ACCESS_TOKEN_2 } from "@/components/ConstantAPI";
 import { useLocation } from "react-router-dom";
 import { fetchAssessmentStatus } from "@/components/assessment-api";
+import { bloomDefaultsFor, defaultLevelForAssessmentType } from "@/components/assessment-level";
+
+const INITIAL_ASSESSMENT_TYPE = "practice";
 
 const defaultQuestionTypes = [
   { id: "mcq", name: "Single selection MCQs", icon: ListChecks, enabled: true, count: 10 },
@@ -163,7 +166,7 @@ const getConfigFromViewData = (viewJobData: any) => {
 
 const Index = ({userDetails}) => {
   const location = useLocation();
-  const [assessmentType, setAssessmentType] = useState("practice");
+  const [assessmentType, setAssessmentType] = useState(INITIAL_ASSESSMENT_TYPE);
   const [assessmentData, setAssessmentData] = useState<any>([]);
   const [currentStep, setCurrentStep] = useState("content");
   const [completedSteps, setCompletedSteps] = useState<string[]>([]);
@@ -176,20 +179,17 @@ const Index = ({userDetails}) => {
   const [language, setLanguage] = useState('English');
   const BASE_URL = import.meta.env.VITE_API_BASE_URL;
   const [questionTypes, setQuestionTypes] = useState(defaultQuestionTypes);
-  const [assessmentLevel, setAssessmentLevel] = useState("intermediate");
+  const [assessmentLevel, setAssessmentLevel] = useState(() =>
+    defaultLevelForAssessmentType(INITIAL_ASSESSMENT_TYPE)
+  );
   const [specificCourseId, setSpecificCourseId] = useState();
   // Optimistic-concurrency token for the editing endpoints. Sourced from
   // GET /status and advanced by every save; sending it is what turns a
   // double submission into a 409 instead of a second write.
   const [assessmentVersion, setAssessmentVersion] = useState<number | undefined>(undefined);
-  const [bloomValues, setBloomValues] = useState<Record<string, number>>({
-    remember: 10,
-    understand: 20,
-    apply: 25,
-    analyze: 20,
-    evaluate: 15,
-    create: 10,
-  });
+  const [bloomValues, setBloomValues] = useState<Record<string, number>>(() =>
+    bloomDefaultsFor(defaultLevelForAssessmentType(INITIAL_ASSESSMENT_TYPE))
+  );
   const [timeLimit, setTimeLimit] = useState(30);
   const [bloomEnabled, setBloomEnabled] = useState(true);
 
@@ -323,6 +323,26 @@ const Index = ({userDetails}) => {
 
   const handleBloomChange = (id: string, value: number) => {
     setBloomValues((prev) => ({ ...prev, [id]: value }));
+  };
+
+  /**
+   * A level chosen by the user — picked on the Configuration step, or
+   * defaulted from a selected course — also resets Bloom's to that level's
+   * default distribution, which the user can then adjust. Re-choosing the
+   * current level keeps any adjustments. Restoring a past assessment sets
+   * both directly instead, so its saved distribution is kept.
+   */
+  const handleAssessmentLevelChange = (level: string) => {
+    if (level === assessmentLevel) return;
+    setAssessmentLevel(level);
+    setBloomValues(bloomDefaultsFor(level));
+  };
+
+  /** Puts the level, and Bloom's with it, back to where `type` starts. */
+  const resetLevelForType = (type: string) => {
+    const level = defaultLevelForAssessmentType(type);
+    setAssessmentLevel(level);
+    setBloomValues(bloomDefaultsFor(level));
   };
   const handleContentNext = () => {
     if (topics.length === 0) {
@@ -567,15 +587,7 @@ const Index = ({userDetails}) => {
     setMaterialFiles([]);
     setLearningOutcomes([]);
     setQuestionTypes(defaultQuestionTypes);
-    setAssessmentLevel("intermediate");
-    setBloomValues({
-      remember: 10,
-      understand: 20,
-      apply: 25,
-      analyze: 20,
-      evaluate: 15,
-      create: 10,
-    });
+    resetLevelForType(assessmentType);
     setTimeLimit(30);
     setIsGenerated(false);
     setCompetencyArea(null);
@@ -633,6 +645,7 @@ const Index = ({userDetails}) => {
                 handleStartOver();
               }
               setAssessmentType(type);
+              resetLevelForType(type);
               setLearningOutcomes([]);
               setCourseIds([]);
               setTopics([]);
@@ -662,6 +675,7 @@ const Index = ({userDetails}) => {
             materialFiles={materialFiles}
             onCourseIdsChange={setCourseIds}
             onCourseNamesChange={setCourseNames}
+            onAssessmentLevelChange={handleAssessmentLevelChange}
             onTopicsChange={setTopics}
             onNotesChange={setNotes}
             onTranscriptFilesChange={setTranscriptFiles}
@@ -689,7 +703,7 @@ const Index = ({userDetails}) => {
             bloomEnabled={bloomEnabled}
             timeLimit={timeLimit}
             onQuestionTypesChange={setQuestionTypes}
-            onAssessmentLevelChange={setAssessmentLevel}
+            onAssessmentLevelChange={handleAssessmentLevelChange}
             onBloomChange={handleBloomChange}
             onBloomToggle={setBloomEnabled}
             onTimeLimitChange={setTimeLimit}
