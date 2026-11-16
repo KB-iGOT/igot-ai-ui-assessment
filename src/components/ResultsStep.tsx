@@ -31,6 +31,7 @@ import type { Question } from "./question-types";
 import {
   correctAnswerText as getCorrectAnswerText,
   createBlankQuestion,
+  isTextAnswer,
   nextQuestionId,
 } from "./question-types";
 import {
@@ -1015,7 +1016,7 @@ const ResultsStep = ({
                       )}
 
                       {/* correct answer */}
-                      {(currentData?.type == 'FTB' || currentData?.type == 'TRUEFALSE') &&
+                      {isTextAnswer(currentData) &&
                         <div className="bg-blue-50/80 rounded-lg p-4 border border-blue-200">
                           <div className="flex items-start gap-3">
                             <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center shrink-0">

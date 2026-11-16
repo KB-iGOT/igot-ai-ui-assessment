@@ -32,7 +32,10 @@ export interface Question {
   bloomPercent: number;
   question: string;
   options: QuestionOption[];
-  /** Letter(s) for MCQ/MULTICHOICE, free text for FTB/TRUEFALSE. */
+  /**
+   * Letter(s) for MCQ/MULTICHOICE/FTB, free text for TRUEFALSE and for
+   * legacy FTB questions saved before FTB carried options.
+   */
   correctAnswer: string | string[];
   rationale: string;
 
@@ -84,10 +87,17 @@ export const letterFor = (index: number) => String.fromCharCode(65 + index);
 export const nextQuestionId = (questions: Question[]) =>
   questions.reduce((max, q) => Math.max(max, q.id), 0) + 1;
 
+/**
+ * True when the answer is free text rather than an option letter: True/False,
+ * and FTB questions generated before FTB answers became four options.
+ */
+export const isTextAnswer = (q: Pick<Question, "type" | "options">) =>
+  q.type === "TRUEFALSE" || (q.type === "FTB" && !q.options?.length);
+
 /** What each type needs before a creator starts filling it in. */
 const blankOptionsFor = (type: string): QuestionOption[] => {
   // Free-text answers carry no options at all.
-  if (type === "TRUEFALSE" || type === "FTB") return [];
+  if (type === "TRUEFALSE") return [];
   // Match-the-following needs both sides of each pair.
   if (type === "MTF") {
     return Array.from({ length: 4 }, (_, i) => ({
@@ -127,7 +137,7 @@ export const QUESTION_TYPE_HINTS: Record<string, string> = {
   MCQ: "One correct answer from several options",
   MULTICHOICE: "Several correct answers from several options",
   TRUEFALSE: "A statement the learner marks true or false",
-  FTB: "The learner types the missing word or phrase",
+  FTB: "The learner picks the missing word or phrase from several options",
   MTF: "The learner pairs items from two columns",
 };
 
@@ -142,7 +152,7 @@ export const correctAnswerText = (q: Question): string => {
     ? [String(q.correctAnswer)]
     : [];
 
-  if (q.type === "FTB" || q.type === "TRUEFALSE") {
+  if (isTextAnswer(q)) {
     return String(q.correctAnswer ?? "");
   }
 

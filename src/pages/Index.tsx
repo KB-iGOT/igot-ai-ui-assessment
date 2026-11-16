@@ -51,7 +51,11 @@ const flattenInOrder = (assessmentData: any): any[] => {
 const normalizeQuestions = (rawQuestions: any[]) => {
   return rawQuestions.map((q: any, index: number) => {
     const type = q.question_type?.toUpperCase();
-    const isMCQ = type === "MCQ";
+    // FTB answers are picked from options like an MCQ. Older FTB questions
+    // carry a free-text correct_answer and no options instead.
+    const isMCQ =
+      type === "MCQ" ||
+      (type === "FTB" && Array.isArray(q.options) && q.options.length > 0);
     const isMulti = type === "MULTICHOICE";
     const isMTF = type === "MTF";
 
@@ -101,7 +105,7 @@ const normalizeQuestions = (rawQuestions: any[]) => {
       correctAnswer = q.correct_option_index.map(labelForIndex).filter(Boolean);
     }
 
-    if (type === "FTB" || type === "TRUEFALSE") {
+    if ((type === "FTB" && !isMCQ) || type === "TRUEFALSE") {
       correctAnswer = q.correct_answer ?? "";
     }
 
@@ -428,7 +432,9 @@ const Index = ({userDetails}) => {
     }
 
     // 🔹 Dummy placeholders
-    formData.append("topic_names", JSON.stringify(topics));
+    topics.forEach(topic => {
+      formData.append("topic_names", topic);
+    });
     formData.append("language", (language).toLowerCase());
     formData.append("additional_instructions", notes || "—");
     // formData.append("additional_instructions", "Auto-generated");

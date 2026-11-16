@@ -19,6 +19,7 @@ import {
   BLOOM_LEVELS,
   QUESTION_TYPE_HINTS,
   QUESTION_TYPE_LABELS,
+  isTextAnswer as answerIsText,
   letterFor,
   typeLabel,
 } from "./question-types";
@@ -102,7 +103,7 @@ const EditQuestionDialog = ({
   const isMTF = draft?.type === "MTF";
   const isMulti = draft?.type === "MULTICHOICE";
   const isFTB = draft?.type === "FTB";
-  const isTextAnswer = isFTB || draft?.type === "TRUEFALSE";
+  const isTextAnswer = !!draft && answerIsText(draft);
   const blankCount = isFTB ? countBlanks(draft.question) : 0;
   const hasOptions = !isTextAnswer && !!draft;
 
@@ -541,7 +542,7 @@ const EditQuestionDialog = ({
             </div>
           )}
 
-          {/* Free-text answer (FTB / TRUEFALSE) */}
+          {/* Free-text answer (TRUEFALSE / legacy FTB without options) */}
           {isTextAnswer && (
             <div>
               <label className="text-sm font-medium text-foreground">
