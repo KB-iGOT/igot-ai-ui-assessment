@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import Tooltip from "@mui/material/Tooltip";
+import { ASSESSMENT_LEVELS } from "./assessment-level";
 
 export interface QuestionTypeConfig {
   id: string;
@@ -42,11 +43,7 @@ interface ConfigurationStepProps {
 const MAX_QUESTIONS_PER_TYPE = 200;
 const MAX_TOTAL_QUESTIONS = 200; // 5 question types × 25 each
 
-const assessmentLevels = [
-  { id: "beginner", name: "Beginner" },
-  { id: "intermediate", name: "Intermediate" },
-  { id: "advanced", name: "Advanced" },
-];
+const assessmentLevels = ASSESSMENT_LEVELS;
 
 const bloomLevels = [
   { id: "remember", name: "Remember", description: "Recall facts", color: "bg-sky-100 border-sky-200 text-sky-700" },
