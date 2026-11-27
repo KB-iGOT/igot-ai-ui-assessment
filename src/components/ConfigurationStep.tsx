@@ -38,6 +38,18 @@ interface ConfigurationStepProps {
   onBack: () => void;
   onGenerate: () => void;
   isGenerating: boolean;
+  /**
+   * False for assessment types with no Bloom's concept (scenario): the section
+   * is not shown and its 100% total does not block generating.
+   */
+  bloomsApplicable?: boolean;
+  /**
+   * Scenario assessments only: passing this makes the level buttons a
+   * multi-select over these ids (at least one stays selected), and
+   * `assessmentLevel` / `onAssessmentLevelChange` are not used for levels.
+   */
+  selectedLevels?: string[];
+  onSelectedLevelsChange?: (levels: string[]) => void;
 }
 
 const MAX_QUESTIONS_PER_TYPE = 200;
@@ -68,8 +80,23 @@ const ConfigurationStep = ({
   onBack,
   onGenerate,
   isGenerating,
+  bloomsApplicable = true,
+  selectedLevels,
+  onSelectedLevelsChange,
 }: ConfigurationStepProps) => {
   const [timeError, setTimeError] = useState(false);
+  const multiLevel = selectedLevels !== undefined;
+
+  /** Adds or removes a level, keeping display order; the last one can't be removed. */
+  const toggleLevel = (id: string) => {
+    const selected = selectedLevels ?? [];
+    if (selected.includes(id) && selected.length === 1) return;
+    onSelectedLevelsChange?.(
+      assessmentLevels
+        .map((level) => level.id)
+        .filter((levelId) => (levelId === id ? !selected.includes(id) : selected.includes(levelId)))
+    );
+  };
 
 
   const toggleQuestionType = (id: string) => {
@@ -245,15 +272,23 @@ const ConfigurationStep = ({
         {/* Level & Time */}
         <div className="space-y-4">
           <div className="card-elevated p-4">
-            <h3 className="text-sm font-medium mb-3">Assessment Level</h3>
+            <h3 className="text-sm font-medium mb-3">
+              Assessment Level
+              {multiLevel && (
+                <span className="text-xs font-normal text-muted-foreground"> — select one or more</span>
+              )}
+            </h3>
             <div className="flex gap-2">
               {assessmentLevels.map((level) => (
                 <button
                   key={level.id}
-                  onClick={() => onAssessmentLevelChange(level.id)}
+                  onClick={() =>
+                    multiLevel ? toggleLevel(level.id) : onAssessmentLevelChange(level.id)
+                  }
+                  aria-pressed={multiLevel ? selectedLevels.includes(level.id) : undefined}
                   className={cn(
                     "flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors",
-                    assessmentLevel === level.id
+                    (multiLevel ? selectedLevels.includes(level.id) : assessmentLevel === level.id)
                       ? "bg-primary text-primary-foreground"
                       : "bg-muted text-muted-foreground hover:bg-muted/80"
                   )}
@@ -358,6 +393,7 @@ const ConfigurationStep = ({
       </div>
 
       {/* Bloom's Taxonomy - Card Grid */}
+      {bloomsApplicable && (
       <div className="card-elevated p-4">
         <div
           className="flex items-center justify-between mb-4"
@@ -509,6 +545,7 @@ const ConfigurationStep = ({
           </div>
         )}
       </div>
+      )}
 
       {/* Action Buttons */}
       <div className="flex gap-3">
@@ -522,7 +559,11 @@ const ConfigurationStep = ({
         </Button>
         <Button
           onClick={onGenerate}
-          disabled={isGenerating || totalQuestions === 0 || (bloomEnabled && bloomTotal !== 100)}
+          disabled={
+            isGenerating ||
+            totalQuestions === 0 ||
+            (bloomsApplicable && bloomEnabled && bloomTotal !== 100)
+          }
           className="flex-[2] h-11"
         >
           {isGenerating ? (

@@ -56,6 +56,9 @@ const typeClasses: Record<string, string> = {
 
   competency:
     "bg-[hsl(265,70%,96%)] text-[hsl(265,55%,52%)] border-[hsl(265,50%,86%)]",
+
+  scenario:
+    "bg-[hsl(340,75%,96%)] text-[hsl(340,60%,48%)] border-[hsl(340,55%,86%)]",
 };
 
 const handleView = (jobId : string) => {
@@ -130,7 +133,8 @@ const handleView = (jobId : string) => {
           type: config.assessment_type
             ? config.assessment_type.charAt(0).toUpperCase() + config.assessment_type.slice(1)
             : "—",
-          course: item.course_names[0], // Display first course
+          // Optional chaining: a scenario job is created without course names.
+          course: item.course_names?.[0], // Display first course
           courseNames: item.course_names || [], // Store all course names for tooltip
           date: createdAt
             ? createdAt.toLocaleDateString("en-GB", {

@@ -33,7 +33,10 @@ import {
   createBlankQuestion,
   isTextAnswer,
   nextQuestionId,
+  typeLabel,
 } from "./question-types";
+import { SCENARIO_COLORS, difficultyLabel, hasRubric, isRankingType, isScenarioOnlyType } from "./scenario";
+import { RankingAnswer, RubricView, ScenarioContext } from "./ScenarioQuestionView";
 import {
   AssessmentApiError,
   createQuestion,
@@ -66,6 +69,8 @@ interface ResultsStepProps {
   onVersionChange?: (version: number) => void;
   /** Re-reads the assessment after a conflict or a vanished question. */
   onReload?: () => Promise<void>;
+  /** A scenario assessment: new questions get the scenario fields and types. */
+  isScenario?: boolean;
 }
 const BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
@@ -203,6 +208,7 @@ const ResultsStep = ({
   version,
   onVersionChange,
   onReload,
+  isScenario = false,
 }: ResultsStepProps) => {
   const [expandedQuestions, setExpandedQuestions] = useState<number[]>([]);
   const [selectedFormat, setSelectedFormat] = useState("pdf");
@@ -263,7 +269,8 @@ const ResultsStep = ({
     return idHighWater.current;
   };
 
-  const startCreating = () => setDraftQuestion(createBlankQuestion(allocateQuestionId()));
+  const startCreating = () =>
+    setDraftQuestion(createBlankQuestion(allocateQuestionId(), "MCQ", { scenario: isScenario }));
 
   const cancelEditing = () => {
     setEditingQuestionId(null);
@@ -338,7 +345,7 @@ const ResultsStep = ({
 
         const result = await createQuestion(jobId, {
           version: versionRef.current,
-          questionType: apiQuestionType(updated.type),
+          questionType: apiQuestionType(updated.type, updated.isScenario),
           question: toCreateBody(updated),
           // No position: appended, which matches where it lands locally.
         });
@@ -819,10 +826,14 @@ const ResultsStep = ({
             const courseName = q.courseName || raw?.course_name || "—";
             const kcmTheme = q.competency || raw?.reasoning?.competency_alignment?.kcm?.competency_theme || "—";
             const relevance = q.relevance ?? q.bloomPercent ?? 0;
-            const colors = bloomColors[q.bloomLevel] ?? bloomColors["Remember"];
+            // Scenario questions have no Bloom's level to colour by.
+            const colors = q.isScenario
+              ? SCENARIO_COLORS
+              : bloomColors[q.bloomLevel] ?? bloomColors["Remember"];
             const isExpanded = expandedQuestions.includes(q.id);
             const currentData = q;
             const isMTF = currentData.type === "MTF";
+            const scenarioOnly = isScenarioOnlyType(currentData.type);
             const isDragging = draggingIndex === qIndex;
             const isDropTarget = dragOverIndex === qIndex && draggingIndex !== qIndex;
             const dropFromAbove = isDropTarget && draggingIndex !== null && draggingIndex < qIndex;
@@ -879,13 +890,22 @@ const ResultsStep = ({
                       <div className="flex-1 min-w-0" onClick={() => toggleQuestion(q.id)}>
                         <div className="flex items-center gap-2 mb-1">
                           <Badge variant="outline" className="text-xs font-normal">
-                            {q.type === "TRUEFALSE"
+                            {scenarioOnly
+                              ? typeLabel(q.type).toUpperCase()
+                              : q.type === "TRUEFALSE"
                               ? "TRUE/FALSE"
                               : q.type === "MULTICHOICE"
                                 ? "MULTI SELECT QUESTION"
                                 : q.type}
                           </Badge>
 
+                          {q.isScenario ? (
+                            /* No Bloom's or relevance: show the domain and level instead */
+                            <span className="text-xs text-muted-foreground">
+                              {[q.scenarioDomain, difficultyLabel(q.difficultyLevel)].filter(Boolean).join(" • ")}
+                            </span>
+                          ) : (
+                            <>
                           <Badge className={cn("text-xs", colors.light, colors.text, colors.border, "border")}>
                             {q.bloomLevel} • {q.bloomPercent}%
                           </Badge>
@@ -893,6 +913,8 @@ const ResultsStep = ({
                           <span className="text-xs text-muted-foreground">
                             Relevance {relevance}%
                           </span>
+                            </>
+                          )}
                         </div>
                         <p className={cn(
                           "text-sm text-foreground cursor-pointer",
@@ -944,9 +966,15 @@ const ResultsStep = ({
                 {isExpanded && (
                   <div className={cn("px-4 pb-4 pt-0", colors.light)}>
                     <div className="ml-12 space-y-4">
+                      {/* Scenario context: title, description, constraints */}
+                      {q.isScenario && <ScenarioContext question={currentData} />}
+
                       {/* Options */}
                       {/* OPTIONS */}
-                      {isMTF ? (
+                      {scenarioOnly ? (
+                        /* Ranking shows the correct order; the rubric types have no options */
+                        isRankingType(currentData.type) ? <RankingAnswer question={currentData} /> : null
+                      ) : isMTF ? (
                         /* ================= MTF : MATCHED ROW LAYOUT ================= */
                         <div className="bg-white/80 border border-border rounded-lg p-4">
                           <div className="space-y-2">
@@ -1036,6 +1064,9 @@ const ResultsStep = ({
                         </div>
                       }
 
+                      {/* Reference answer + rubric (open text, action planning, short answer) */}
+                      {hasRubric(currentData.type) && <RubricView question={currentData} />}
+
 
                       {/* justification section */}
                       <div className="bg-white rounded-2xl border border-border overflow-hidden">
@@ -1048,6 +1079,8 @@ const ResultsStep = ({
                           </div>
                         </div>
                         <div className="px-6 py-5 space-y-4">
+                          {/* Ranking and rubric types show their answer above instead */}
+                          {!scenarioOnly && (
                           <div className="flex items-center gap-2 mb-2">
                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" className="lucide lucide-circle-check-big w-4 h-4 text-accent"><path d="M21.801 10A10 10 0 1 1 17 3.335"></path><path d="m9 11 3 3L22 4"></path></svg>
                             <span className="text-sm font-semibold text-foreground">
@@ -1057,6 +1090,7 @@ const ResultsStep = ({
                               </span>
                             </span>
                           </div>
+                          )}
                           <div className="flex items-start gap-3">
                             <div className="w-7 h-7 rounded-md bg-amber-100 flex items-center justify-center shrink-0"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" className="lucide lucide-lightbulb w-3.5 h-3.5 text-amber-600"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"></path><path d="M9 18h6"></path><path d="M10 22h4"></path></svg></div>
                             <div>
@@ -1064,6 +1098,9 @@ const ResultsStep = ({
                               <div className="text-sm text-foreground break-words max-w-full">{rationale}</div>
                             </div>
                           </div>
+                          {/* Scenario questions have no Bloom's, learning outcome, KCM, course or relevance */}
+                          {!q.isScenario && (
+                          <>
                           <hr className="my-4 border-border" />
                           <div className="grid grid-cols-2 gap-3">
                             <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/40">
@@ -1117,6 +1154,8 @@ const ResultsStep = ({
                               />
                             </div>
                           </div>
+                          </>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1244,7 +1283,7 @@ const ResultsStep = ({
         saving={isSaving}
         onTypeChosen={(type) =>
           setDraftQuestion(prev =>
-            prev ? createBlankQuestion(prev.id, type) : prev
+            prev ? createBlankQuestion(prev.id, type, { scenario: !!prev.isScenario }) : prev
           )
         }
       />
