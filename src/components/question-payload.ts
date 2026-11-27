@@ -13,14 +13,29 @@
 
 import type { Question, QuestionOption } from "./question-types";
 import { isTextAnswer } from "./question-types";
+import type { RubricCriterion } from "./scenario";
+import {
+  hasExpectedComponents,
+  hasRubric,
+  isRankingType,
+  isScenarioOnlyType,
+  modelAnswerField,
+  rankingOrder,
+  scenarioApiQuestionType,
+} from "./scenario";
 
-/** UI type -> the `questionType` the create endpoint expects. */
-export const apiQuestionType = (type: string): string =>
-  (type || "MCQ").toLowerCase();
+/**
+ * UI type -> the `questionType` the create endpoint expects. A scenario MCQ or
+ * multi-select is its own API type (`scenario_mcq`, `scenario_multiselect`).
+ */
+export const apiQuestionType = (type: string, scenario = false): string =>
+  (scenario ? scenarioApiQuestionType(type || "MCQ") : type || "MCQ").toLowerCase();
 
 const isMTF = (q: Question) => q.type === "MTF";
 const isMulti = (q: Question) => q.type === "MULTICHOICE";
-const hasOptions = (q: Question) => !isMTF(q) && !isTextAnswer(q);
+// Ranking and the rubric types carry their own shapes, below.
+const hasOptions = (q: Question) =>
+  !isMTF(q) && !isTextAnswer(q) && !isScenarioOnlyType(q.type);
 
 const asLabels = (correctAnswer: Question["correctAnswer"]): string[] =>
   Array.isArray(correctAnswer)
@@ -108,7 +123,100 @@ export const toCreateBody = (q: Question): Record<string, unknown> => {
 
   if (q.courseName) body.course_name = q.courseName;
 
+  if (q.isScenario) {
+    // A scenario question has no Bloom's level, relevance, reasoning or course.
+    for (const key of ["blooms_level", "relevance_percentage", "reasoning", "course_name"]) {
+      delete body[key];
+    }
+    Object.assign(body, scenarioCreateFields(q));
+  }
+
   return body;
+};
+
+// ---------------------------------------------------------------------------
+// Scenario questions — the same shape the generate response stores.
+// ---------------------------------------------------------------------------
+
+export const toApiRubric = (r: RubricCriterion) => ({
+  criterion: r.criterion,
+  description: r.description,
+  score_anchors: { "0": r.level0, "1": r.level1, "2": r.level2, "3": r.level3 },
+  weight_percent: Number.isFinite(r.weight) ? r.weight : 0,
+  evidence_indicators: r.evidence,
+});
+
+/** Actions with stable indexes, and the correct order (best first) as those indexes. */
+const rankingBody = (q: Question) => {
+  const { apiOptions, indexByLabel } = resolveOptions(q);
+  return {
+    options: apiOptions,
+    correct_ranking: rankingOrder(q)
+      .map((label) => indexByLabel.get(label))
+      .filter((n): n is number => Number.isFinite(n)),
+  };
+};
+
+/** Open text and short answer store a written answer; action planning a list. */
+const modelAnswerBody = (q: Question): Record<string, unknown> =>
+  hasExpectedComponents(q.type)
+    ? { expected_components: q.expectedComponents ?? [] }
+    : { [modelAnswerField(q.type)]: q.referenceAnswer ?? "" };
+
+const scenarioCreateFields = (q: Question): Record<string, unknown> => {
+  const fields: Record<string, unknown> = {
+    scenario: {
+      title: q.scenarioTitle ?? "",
+      description: q.scenarioDescription ?? "",
+      constraints: q.constraints ?? [],
+    },
+  };
+  if (q.scenarioDomain) fields.scenario_domain = q.scenarioDomain;
+  if (q.difficultyLevel) fields.difficulty_level = q.difficultyLevel;
+  if (hasRubric(q.type)) {
+    Object.assign(fields, modelAnswerBody(q));
+    fields.rubric = (q.rubrics ?? []).map(toApiRubric);
+  }
+  if (isRankingType(q.type)) Object.assign(fields, rankingBody(q));
+  return fields;
+};
+
+const scenarioUpdates = (before: Question, after: Question): Record<string, unknown> => {
+  const updates: Record<string, unknown> = {};
+  const changed = (a: unknown, b: unknown) => JSON.stringify(a ?? "") !== JSON.stringify(b ?? "");
+
+  if (changed(before.scenarioTitle, after.scenarioTitle))
+    updates["scenario.title"] = after.scenarioTitle ?? "";
+  if (changed(before.scenarioDescription, after.scenarioDescription))
+    updates["scenario.description"] = after.scenarioDescription ?? "";
+  if (changed(before.constraints ?? [], after.constraints ?? []))
+    updates["scenario.constraints"] = after.constraints ?? [];
+  if (changed(before.scenarioDomain, after.scenarioDomain))
+    updates.scenario_domain = after.scenarioDomain ?? "";
+  if (changed(before.difficultyLevel, after.difficultyLevel))
+    updates.difficulty_level = after.difficultyLevel ?? "";
+
+  if (hasRubric(after.type)) {
+    if (
+      changed(before.referenceAnswer, after.referenceAnswer) ||
+      changed(before.expectedComponents, after.expectedComponents)
+    ) {
+      Object.assign(updates, modelAnswerBody(after));
+    }
+    if (changed(before.rubrics ?? [], after.rubrics ?? []))
+      updates.rubric = (after.rubrics ?? []).map(toApiRubric);
+  }
+
+  // Actions and their order move together, like options and the answer key.
+  if (
+    isRankingType(after.type) &&
+    (!sameOptions(before.options, after.options) ||
+      JSON.stringify(rankingOrder(before)) !== JSON.stringify(rankingOrder(after)))
+  ) {
+    Object.assign(updates, rankingBody(after));
+  }
+
+  return updates;
 };
 
 const sameOptions = (a: QuestionOption[], b: QuestionOption[]) =>
@@ -192,6 +300,11 @@ export const toUpdates = (
 
   if ((before.courseName ?? "") !== (after.courseName ?? "")) {
     updates.course_name = after.courseName ?? "";
+  }
+
+  if (after.isScenario) {
+    delete updates.blooms_level;
+    Object.assign(updates, scenarioUpdates(before, after));
   }
 
   return updates;

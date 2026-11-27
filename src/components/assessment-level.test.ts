@@ -13,6 +13,7 @@ describe("defaultLevelForAssessmentType", () => {
     expect(defaultLevelForAssessmentType("standalone")).toBe("beginner");
     // The selector's id is capitalised.
     expect(defaultLevelForAssessmentType("Competency")).toBe("beginner");
+    expect(defaultLevelForAssessmentType("scenario")).toBe("beginner");
   });
 
   it("starts single-course types at the default level until a course sets it", () => {

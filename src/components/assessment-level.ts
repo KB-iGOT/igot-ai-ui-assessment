@@ -9,10 +9,10 @@ export const DEFAULT_ASSESSMENT_LEVEL = "intermediate";
 
 /**
  * Assessment types whose level cannot come from a course — several courses
- * (comprehensive) or none at all (standalone, competency) — so they start at
- * beginner. Practice and final take the level from their one course.
+ * (comprehensive) or none at all (standalone, competency, scenario) — so they
+ * start at beginner. Practice and final take the level from their one course.
  */
-const BEGINNER_BY_DEFAULT_TYPES = ["comprehensive", "standalone", "competency"];
+const BEGINNER_BY_DEFAULT_TYPES = ["comprehensive", "standalone", "competency", "scenario"];
 
 /** The level an assessment type starts at, before any course is picked. */
 export const defaultLevelForAssessmentType = (assessmentType: string): string =>

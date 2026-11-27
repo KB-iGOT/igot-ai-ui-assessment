@@ -23,6 +23,18 @@ import {
   letterFor,
   typeLabel,
 } from "./question-types";
+import {
+  SCENARIO_QUESTION_TYPE_HINTS,
+  SCENARIO_QUESTION_TYPE_LABELS,
+  hasRubric,
+  isRankingType,
+  isScenarioOnlyType,
+  rankingOrder,
+  tidyScenarioQuestion,
+  validateScenarioQuestion,
+} from "./scenario";
+import { RankingEditor, RubricEditor, ScenarioContextFields } from "./ScenarioQuestionEditor";
+import { ASSESSMENT_LEVELS } from "./assessment-level";
 
 /** How a fill-in-the-blank gap is written in the question text. */
 export const BLANK = "_____";
@@ -83,6 +95,7 @@ const EditQuestionDialog = ({
         correctAnswer: Array.isArray(question.correctAnswer)
           ? [...question.correctAnswer]
           : question.correctAnswer,
+        ...(question.rubrics ? { rubrics: question.rubrics.map((r) => ({ ...r })) } : {}),
       });
     }
     if (!open) {
@@ -105,7 +118,14 @@ const EditQuestionDialog = ({
   const isFTB = draft?.type === "FTB";
   const isTextAnswer = !!draft && answerIsText(draft);
   const blankCount = isFTB ? countBlanks(draft.question) : 0;
-  const hasOptions = !isTextAnswer && !!draft;
+  // Ranking and the rubric types have their own editors instead of options.
+  const hasOptions = !isTextAnswer && !!draft && !isScenarioOnlyType(draft.type);
+  const isScenario = !!draft?.isScenario;
+  const isRanking = isRankingType(draft?.type);
+  const isRubric = hasRubric(draft?.type);
+  // A scenario assessment offers its own six types.
+  const typeLabels = isScenario ? SCENARIO_QUESTION_TYPE_LABELS : QUESTION_TYPE_LABELS;
+  const typeHints = isScenario ? SCENARIO_QUESTION_TYPE_HINTS : QUESTION_TYPE_HINTS;
 
   const correctLabels = useMemo(() => {
     if (!draft) return [] as string[];
@@ -120,6 +140,9 @@ const EditQuestionDialog = ({
 
   const set = <K extends keyof Question>(field: K, value: Question[K]) =>
     setDraft((d) => (d ? { ...d, [field]: value } : d));
+
+  const patch = (changes: Partial<Question>) =>
+    setDraft((d) => (d ? { ...d, ...changes } : d));
 
   /**
    * Bloom weightage and relevance are two dialog controls over the same
@@ -260,6 +283,10 @@ const EditQuestionDialog = ({
   /** Blocks save on the states that would produce an unusable question. */
   const validate = (): string | null => {
     if (!draft.question.trim()) return "Question text cannot be empty.";
+    if (isScenario) {
+      const scenarioError = validateScenarioQuestion(draft);
+      if (scenarioError) return scenarioError;
+    }
     if (hasOptions) {
       if (draft.options.some((o) => !o.text.trim()))
         return "Every option needs text.";
@@ -270,8 +297,9 @@ const EditQuestionDialog = ({
     }
     if (isTextAnswer && !String(draft.correctAnswer).trim())
       return "Correct answer cannot be empty.";
+    // Scenario questions have no Bloom's weightage to check.
     const weight = Number(draft.bloomPercent);
-    if (Number.isNaN(weight) || weight < 0 || weight > 100)
+    if (!isScenario && (Number.isNaN(weight) || weight < 0 || weight > 100))
       return "Bloom weightage must be between 0 and 100.";
     // The API takes the KCM triple all-or-nothing. Only checked when the
     // reviewer touched it, so an untouched partial mapping doesn't block
@@ -290,7 +318,11 @@ const EditQuestionDialog = ({
       toast({ title: "Cannot save", description: error, variant: "destructive" });
       return;
     }
-    onSave({ ...draft, question: draft.question.trim() });
+    const trimmed = { ...draft, question: draft.question.trim() };
+    const saved = isScenario ? tidyScenarioQuestion(trimmed) : trimmed;
+    // Save the full order, so actions never moved still have a rank.
+    if (isRanking) saved.correctAnswer = rankingOrder(saved);
+    onSave(saved);
   };
 
   const isCreate = mode === "create";
@@ -370,7 +402,7 @@ const EditQuestionDialog = ({
               aria-label="Question type"
               className="grid grid-cols-2 gap-2"
             >
-              {Object.entries(QUESTION_TYPE_LABELS).map(([value, label]) => {
+              {Object.entries(typeLabels).map(([value, label]) => {
                 const selected = draft.type === value;
                 return (
                   <button
@@ -387,7 +419,7 @@ const EditQuestionDialog = ({
                   >
                     <div className="text-sm font-medium text-foreground">{label}</div>
                     <div className="text-xs text-muted-foreground mt-0.5">
-                      {QUESTION_TYPE_HINTS[value]}
+                      {typeHints[value]}
                     </div>
                   </button>
                 );
@@ -402,6 +434,9 @@ const EditQuestionDialog = ({
 
         /* Step 2 — the question itself */
         <div className="px-6 pb-2 overflow-y-auto flex-1 space-y-5">
+          {/* Scenario context — every scenario question */}
+          {isScenario && <ScenarioContextFields question={draft} onChange={patch} />}
+
           {/* Question text */}
           <div>
             <div className="flex items-center justify-between">
@@ -542,6 +577,10 @@ const EditQuestionDialog = ({
             </div>
           )}
 
+          {/* Scenario-only answer shapes */}
+          {isRanking && <RankingEditor question={draft} onChange={patch} />}
+          {isRubric && <RubricEditor question={draft} onChange={patch} />}
+
           {/* Free-text answer (TRUEFALSE / legacy FTB without options) */}
           {isTextAnswer && (
             <div>
@@ -607,7 +646,7 @@ const EditQuestionDialog = ({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Object.entries(QUESTION_TYPE_LABELS).map(([value, label]) => (
+                    {Object.entries(typeLabels).map(([value, label]) => (
                       <SelectItem key={value} value={value}>
                         {label}
                       </SelectItem>
@@ -621,6 +660,32 @@ const EditQuestionDialog = ({
                 )}
               </div>
 
+              {/* Scenario questions carry their own difficulty level. */}
+              {isScenario && (
+                <div>
+                  <label className="text-sm text-foreground">Difficulty level</label>
+                  <span className="text-destructive">*</span>
+                  <Select
+                    value={draft.difficultyLevel ?? ""}
+                    onValueChange={(v) => set("difficultyLevel", v)}
+                  >
+                    <SelectTrigger className="mt-2" aria-label="Difficulty level">
+                      <SelectValue placeholder="Select level" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ASSESSMENT_LEVELS.map((level) => (
+                        <SelectItem key={level.id} value={level.id}>
+                          {level.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {/* Scenario questions have no Bloom's, relevance, learning outcome, KCM or course. */}
+              {!isScenario && (
+              <>
               <div>
                 <label className="text-sm text-foreground">Bloom's level</label>
                 <Select
@@ -723,6 +788,8 @@ const EditQuestionDialog = ({
                   placeholder="Course this question belongs to"
                 />
               </div>
+              </>
+              )}
             </div>
           </div>
         </div>

@@ -13,6 +13,16 @@ import { ACCESS_TOKEN_2 } from "@/components/ConstantAPI";
 import { useLocation } from "react-router-dom";
 import { fetchAssessmentStatus } from "@/components/assessment-api";
 import { bloomDefaultsFor, defaultLevelForAssessmentType } from "@/components/assessment-level";
+import {
+  SCENARIO_REQUEST_FIELDS,
+  defaultScenarioLevels,
+  isScenarioApiType,
+  isScenarioAssessment,
+  normalizeScenarioQuestion,
+  scenarioDefaultQuestionTypes,
+  scenarioLevelsFrom,
+  uiQuestionType,
+} from "@/components/scenario";
 
 const INITIAL_ASSESSMENT_TYPE = "practice";
 
@@ -24,6 +34,23 @@ const defaultQuestionTypes = [
   { id: "multichoice", name: "Multiple selection MCQs", icon: SquareCheckBig, enabled: false, count: 1 },
   // { id: "essay", name: "Essay", icon: FileText, enabled: false, count: 0 },
 ];
+
+/** Scenario assessments offer their own six question types. */
+const defaultQuestionTypesFor = (assessmentType: string) =>
+  isScenarioAssessment(assessmentType) ? scenarioDefaultQuestionTypes : defaultQuestionTypes;
+
+/** A saved list field, which may arrive as an array, a JSON array string or a comma string. */
+const toStringList = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value.map(String).filter((v) => v.trim());
+  if (typeof value !== "string" || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed.map(String).filter((v) => v.trim());
+  } catch {
+    /* not JSON — treat as a comma-separated string */
+  }
+  return value.split(",").map((v) => v.trim()).filter(Boolean);
+};
 
 const letterAt = (i: number) => String.fromCharCode(65 + i);
 
@@ -51,9 +78,15 @@ const flattenInOrder = (assessmentData: any): any[] => {
   ];
 };
 
-const normalizeQuestions = (rawQuestions: any[]) => {
+/**
+ * `scenarioAssessment` marks every question as a scenario question (no Bloom's,
+ * scenario context). Scenario question types are also recognised on their own.
+ */
+const normalizeQuestions = (rawQuestions: any[], scenarioAssessment = false) => {
   return rawQuestions.map((q: any, index: number) => {
-    const type = q.question_type?.toUpperCase();
+    const apiType = q.question_type?.toUpperCase();
+    // A scenario MCQ / multi-select is read exactly like an MCQ / multi-select.
+    const type = uiQuestionType(apiType);
     // FTB answers are picked from options like an MCQ. Older FTB questions
     // carry a free-text correct_answer and no options instead.
     const isMCQ =
@@ -114,7 +147,7 @@ const normalizeQuestions = (rawQuestions: any[]) => {
 
     const kcm = q.reasoning?.competency_alignment?.kcm || {};
 
-    return {
+    const question = {
       id: index + 1,
       questionId: q.question_id,
       type,
@@ -144,6 +177,10 @@ const normalizeQuestions = (rawQuestions: any[]) => {
       competencySubTheme: kcm.competency_sub_theme ?? "",
       courseName: q.course_name ?? "",
     };
+
+    return scenarioAssessment || isScenarioApiType(apiType)
+      ? { ...question, ...normalizeScenarioQuestion(q, type) }
+      : question;
   });
 };
 
@@ -196,6 +233,13 @@ const Index = ({userDetails}) => {
   const [competencyArea, setCompetencyArea] = useState<string | null>(null);
   const [competencyThemes, setCompetencyThemes] = useState<any[]>([]);
   const [competencySubThemes, setCompetencySubThemes] = useState<any[]>([]);
+  // Scenario assessments only.
+  const [scenarioTopic, setScenarioTopic] = useState("");
+  const [scenarioDomains, setScenarioDomains] = useState<string[]>([]);
+  const [targetAudience, setTargetAudience] = useState("");
+  // Scenario picks one or more levels; the other types keep `assessmentLevel`.
+  const [scenarioLevels, setScenarioLevels] = useState<string[]>(defaultScenarioLevels);
+  const isScenario = isScenarioAssessment(assessmentType);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isGenerated, setIsGenerated] = useState(false);
   const [questions, setQuestions] = useState<any[]>([]);
@@ -209,8 +253,11 @@ const Index = ({userDetails}) => {
         ? JSON.parse(viewJobData.assessment_data)
         : viewJobData.assessment_data;
 
+    const restoredIsScenario = isScenarioAssessment(
+      getConfigFromViewData(viewJobData).assessment_type
+    );
     const rawQuestions = flattenInOrder(assessmentDataFetch);
-    const normalizedQuestions = normalizeQuestions(rawQuestions as any[]);
+    const normalizedQuestions = normalizeQuestions(rawQuestions as any[], restoredIsScenario);
 
     setAssessmentData(assessmentDataFetch);
     setQuestions(normalizedQuestions);
@@ -272,6 +319,13 @@ const Index = ({userDetails}) => {
     }
     setCompetencyThemes(toNameList(config.competency_themes).map((name) => ({ name })));
     setCompetencySubThemes(toNameList(config.competency_sub_themes).map((name) => ({ name })));
+    if (restoredIsScenario) {
+      setScenarioTopic(String(config[SCENARIO_REQUEST_FIELDS.topic] ?? ""));
+      setScenarioDomains(toStringList(config[SCENARIO_REQUEST_FIELDS.domains]));
+      setTargetAudience(String(config[SCENARIO_REQUEST_FIELDS.audience] ?? ""));
+      const levels = scenarioLevelsFrom(toStringList(config[SCENARIO_REQUEST_FIELDS.levels]));
+      if (levels.length) setScenarioLevels(levels);
+    }
     if (config.difficulty) setAssessmentLevel(config.difficulty);
     if (config.language) setLanguage(config.language.charAt(0).toUpperCase() + config.language.slice(1));
     const timeLimitValue = config.time_limit ?? viewJobData.time_limit;
@@ -288,7 +342,7 @@ const Index = ({userDetails}) => {
 
     if (config.question_type_counts) {
       const counts = typeof config.question_type_counts === "string" ? JSON.parse(config.question_type_counts) : config.question_type_counts;
-      setQuestionTypes(prev => prev.map(qt => ({
+      setQuestionTypes(prev => (restoredIsScenario ? scenarioDefaultQuestionTypes : prev).map(qt => ({
         ...qt,
         enabled: qt.id in counts,
         count: counts[qt.id] ?? qt.count,
@@ -313,7 +367,7 @@ const Index = ({userDetails}) => {
 
           setAssessmentData(freshAssessmentData);
           setAssessmentVersion(data.version);
-          setQuestions(normalizeQuestions(flattenInOrder(freshAssessmentData)));
+          setQuestions(normalizeQuestions(flattenInOrder(freshAssessmentData), restoredIsScenario));
         })
         .catch(() => {
           /* keep showing the snapshot already applied above */
@@ -345,7 +399,8 @@ const Index = ({userDetails}) => {
     setBloomValues(bloomDefaultsFor(level));
   };
   const handleContentNext = () => {
-    if (topics.length === 0) {
+    // Key Learning Areas are optional for scenario; its own inputs are checked on the step.
+    if (!isScenario && topics.length === 0) {
       toast({
         title: "Topics Required",
         description: "Please add at least one topic.",
@@ -419,10 +474,12 @@ const Index = ({userDetails}) => {
     );
 
     const isCompetency = assessmentType.toLowerCase() === "competency";
-    if (!isCompetency) {
+    // Scenario assessments have no course and no competency selection, so
+    // they send neither set of fields.
+    if (!isCompetency && !isScenario) {
       formData.append("course_ids", courseIds);
       formData.append("course_names", courseNames.join(","));
-    } else {
+    } else if (isCompetency) {
       if (competencyArea) {
         formData.append("competency_area", competencyArea);
       }
@@ -438,7 +495,14 @@ const Index = ({userDetails}) => {
 
     // 🔹 From this component
     formData.append("assessment_type", assessmentType.toLowerCase());
-    formData.append("difficulty", assessmentLevel);
+    if (isScenario) {
+      // Appended once per level, like the other list fields.
+      scenarioLevels.forEach(level => {
+        formData.append(SCENARIO_REQUEST_FIELDS.levels, level);
+      });
+    } else {
+      formData.append("difficulty", assessmentLevel);
+    }
     formData.append("total_questions", totalQuestions.toString());
 
     // enabledQuestionTypes.forEach(type => {
@@ -447,7 +511,8 @@ const Index = ({userDetails}) => {
 
 
     formData.append("time_limit", timeLimit.toString());
-    if (bloomEnabled) {
+    // Scenario assessments have no Bloom's concept, so never send a distribution.
+    if (bloomEnabled && !isScenario) {
       formData.append("blooms_config", JSON.stringify(bloomValues));
     }
 
@@ -455,6 +520,13 @@ const Index = ({userDetails}) => {
     topics.forEach(topic => {
       formData.append("topic_names", topic);
     });
+    if (isScenario) {
+      formData.append(SCENARIO_REQUEST_FIELDS.topic, scenarioTopic.trim());
+      scenarioDomains.forEach(domain => {
+        formData.append(SCENARIO_REQUEST_FIELDS.domains, domain);
+      });
+      formData.append(SCENARIO_REQUEST_FIELDS.audience, targetAudience.trim());
+    }
     formData.append("language", (language).toLowerCase());
     formData.append("additional_instructions", notes || "—");
     // formData.append("additional_instructions", "Auto-generated");
@@ -517,7 +589,7 @@ const Index = ({userDetails}) => {
 
 
           const rawQuestions = flattenInOrder(assessmentDataFetch);
-          const normalizedQuestions = normalizeQuestions(rawQuestions);
+          const normalizedQuestions = normalizeQuestions(rawQuestions, isScenario);
           setQuestions(normalizedQuestions);
           setCurrentStep("results");
           setIsGenerating(false);
@@ -571,7 +643,7 @@ const Index = ({userDetails}) => {
 
     setAssessmentData(assessmentDataFetch);
     setAssessmentVersion(data.version);
-    setQuestions(normalizeQuestions(flattenInOrder(assessmentDataFetch)));
+    setQuestions(normalizeQuestions(flattenInOrder(assessmentDataFetch), isScenario));
   };
 
 
@@ -586,13 +658,17 @@ const Index = ({userDetails}) => {
     setTranscriptFiles([]);
     setMaterialFiles([]);
     setLearningOutcomes([]);
-    setQuestionTypes(defaultQuestionTypes);
+    setQuestionTypes(defaultQuestionTypesFor(assessmentType));
     resetLevelForType(assessmentType);
     setTimeLimit(30);
     setIsGenerated(false);
     setCompetencyArea(null);
     setCompetencyThemes([]);
     setCompetencySubThemes([]);
+    setScenarioTopic("");
+    setScenarioDomains([]);
+    setTargetAudience("");
+    setScenarioLevels(defaultScenarioLevels());
   };
 
   const totalQuestions = isGenerated && questions?.length > 0
@@ -612,7 +688,7 @@ const Index = ({userDetails}) => {
         <div className="flex items-center mb-3">
           <h3 className="text-sm font-medium text-foreground">Assessment Type</h3>
           <Tooltip
-            title="Choose the assessment type based on your evaluation needs — practice for revision, final for end-of-course, comprehensive for multi-course, standalone for independent, or competency for KCM-mapped assessments."
+            title="Choose the assessment type based on your evaluation needs — practice for revision, final for end-of-course, comprehensive for multi-course, standalone for independent, competency for KCM-mapped, or scenario for scenario-based assessments."
             arrow
             placement="top"
             componentsProps={{
@@ -644,11 +720,20 @@ const Index = ({userDetails}) => {
               if (currentStep === 'results') {
                 handleStartOver();
               }
+              // Scenario has its own question types; swap only when moving in
+              // or out of it, so the other types keep today's behaviour.
+              if (isScenarioAssessment(type) !== isScenario) {
+                setQuestionTypes(defaultQuestionTypesFor(type));
+              }
               setAssessmentType(type);
               resetLevelForType(type);
               setLearningOutcomes([]);
               setCourseIds([]);
               setTopics([]);
+              setScenarioTopic("");
+              setScenarioDomains([]);
+              setTargetAudience("");
+              setScenarioLevels(defaultScenarioLevels());
             }}
             currentStep={currentStep}
           />
@@ -692,6 +777,12 @@ const Index = ({userDetails}) => {
             onThemesChange={setCompetencyThemes}
             selectedSubThemes={competencySubThemes}
             onSubThemesChange={setCompetencySubThemes}
+            scenarioTopic={scenarioTopic}
+            onScenarioTopicChange={setScenarioTopic}
+            scenarioDomains={scenarioDomains}
+            onScenarioDomainsChange={setScenarioDomains}
+            targetAudience={targetAudience}
+            onTargetAudienceChange={setTargetAudience}
           />
         )}
 
@@ -710,6 +801,9 @@ const Index = ({userDetails}) => {
             onBack={() => setCurrentStep("content")}
             onGenerate={() => handleGenerate("generate")}
             isGenerating={isGenerating}
+            bloomsApplicable={!isScenario}
+            selectedLevels={isScenario ? scenarioLevels : undefined}
+            onSelectedLevelsChange={setScenarioLevels}
           />
         )}
 
@@ -717,9 +811,11 @@ const Index = ({userDetails}) => {
           <ResultsStep
             isGenerated={isGenerated}
             totalQuestions={totalQuestions}
-            assessmentLevel={assessmentLevel}
+            // Scenario: the summary lists every selected level.
+            assessmentLevel={isScenario ? scenarioLevels.join(", ") : assessmentLevel}
             timeLimit={timeLimit}
-            topics={topics}
+            // Scenario: Key Learning Areas are optional, so show the domains too.
+            topics={isScenario ? [...new Set([...scenarioDomains, ...topics])] : topics}
             onStartOver={handleStartOver}
             courseIds={courseIds}
             specificCourseId={specificCourseId}
@@ -733,6 +829,7 @@ const Index = ({userDetails}) => {
             version={assessmentVersion}
             onVersionChange={setAssessmentVersion}
             onReload={reloadAssessment}
+            isScenario={isScenario}
           />
         )}
       </main>

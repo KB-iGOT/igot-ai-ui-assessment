@@ -8,6 +8,16 @@
  * stay consistent.
  */
 
+import type { RubricCriterion } from "./scenario";
+import {
+  SCENARIO_QUESTION_TYPE_LABELS,
+  blankScenarioFields,
+  hasExpectedComponents,
+  hasRubric,
+  isRankingType,
+  rankingOrder,
+} from "./scenario";
+
 export interface QuestionOption {
   label: string;
   text: string;
@@ -54,6 +64,25 @@ export interface Question {
   competencySubTheme?: string;
   courseName?: string;
   question_type_rationale?: string;
+
+  // Scenario assessments only (see ./scenario). Absent on every other type,
+  // so none of the existing types' behaviour depends on them.
+  /** True for every question in a scenario assessment: no Bloom's, scenario context shown. */
+  isScenario?: boolean;
+  scenarioTitle?: string;
+  scenarioDescription?: string;
+  /** Optional, one per entry; often empty. */
+  constraints?: string[];
+  /** Which of the assessment's scenario domains the question covers. */
+  scenarioDomain?: string;
+  /** beginner / intermediate / advanced (`difficulty_level`). Editable; required on save. */
+  difficultyLevel?: string;
+  /** Open text (`reference_answer`) and short answer (`expected_answer`). */
+  referenceAnswer?: string;
+  /** Action planning only: what a good plan includes. */
+  expectedComponents?: string[];
+  /** Open text, action planning and short answer. */
+  rubrics?: RubricCriterion[];
 }
 
 export const BLOOM_LEVELS = [
@@ -74,7 +103,8 @@ export const QUESTION_TYPE_LABELS: Record<string, string> = {
 };
 
 /** Display label for a question type, falling back to the raw value. */
-export const typeLabel = (type: string) => QUESTION_TYPE_LABELS[type] ?? type;
+export const typeLabel = (type: string) =>
+  QUESTION_TYPE_LABELS[type] ?? SCENARIO_QUESTION_TYPE_LABELS[type] ?? type;
 
 /** 0 -> "A", 1 -> "B", … */
 export const letterFor = (index: number) => String.fromCharCode(65 + index);
@@ -113,8 +143,20 @@ const blankOptionsFor = (type: string): QuestionOption[] => {
  * A blank question scaffolded for the chosen type. The type is picked before
  * the form is shown, so the answer shape is correct from the outset rather
  * than being converted afterwards.
+ *
+ * `scenario` adds the scenario fields, and the answer shape of the scenario
+ * types, for a question in a scenario assessment.
  */
-export const createBlankQuestion = (id: number, type = "MCQ"): Question => ({
+export const createBlankQuestion = (
+  id: number,
+  type = "MCQ",
+  { scenario = false }: { scenario?: boolean } = {}
+): Question => {
+  const question = blankQuestionFor(id, type);
+  return scenario ? { ...question, ...blankScenarioFields(type) } : question;
+};
+
+const blankQuestionFor = (id: number, type: string): Question => ({
   id,
   type,
   bloomLevel: "Remember",
@@ -143,6 +185,18 @@ export const QUESTION_TYPE_HINTS: Record<string, string> = {
 
 /** Resolves the human-readable correct answer for display. */
 export const correctAnswerText = (q: Question): string => {
+  // Scenario-only types. Neither can occur outside a scenario assessment.
+  if (isRankingType(q.type)) {
+    return rankingOrder(q)
+      .map((l, i) => `${i + 1}. ${q.options.find((o) => o.label === l)?.text ?? l}`)
+      .join("  ");
+  }
+  if (hasRubric(q.type)) {
+    return hasExpectedComponents(q.type)
+      ? (q.expectedComponents ?? []).map((c, i) => `${i + 1}. ${c}`).join("  ")
+      : q.referenceAnswer ?? "";
+  }
+
   if (q.type === "MTF") {
     return q.options.map((o) => `${o.text} → ${o.right ?? ""}`).join(", ");
   }

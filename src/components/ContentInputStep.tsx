@@ -24,6 +24,8 @@ import { COMPETENCY_OPTIONS, SUB_THEME_MAP, SUB_THEME_OPTIONS, THEME_OPTIONS } f
 import { ACCESS_TOKEN_2 } from "./ConstantAPI";
 import { sameName } from "./kcm-framework";
 import { toAssessmentLevel } from "./assessment-level";
+import { isScenarioAssessment } from "./scenario";
+import ScenarioContentFields from "./ScenarioContentFields";
 
 interface ContentInputStepProps {
   assessmentType: string;
@@ -56,6 +58,13 @@ interface ContentInputStepProps {
   onThemesChange: (themes: any[]) => void;
   selectedSubThemes: any[];
   onSubThemesChange: (subThemes: any[]) => void;
+  // Scenario assessments only.
+  scenarioTopic?: string;
+  onScenarioTopicChange?: (topic: string) => void;
+  scenarioDomains?: string[];
+  onScenarioDomainsChange?: (domains: string[]) => void;
+  targetAudience?: string;
+  onTargetAudienceChange?: (audience: string) => void;
 }
 interface CourseOption {
   value: string; // identifier
@@ -90,7 +99,15 @@ const ContentInputStep = ({
   onThemesChange,
   selectedSubThemes,
   onSubThemesChange,
+  scenarioTopic = "",
+  onScenarioTopicChange = () => {},
+  scenarioDomains = [],
+  onScenarioDomainsChange = () => {},
+  targetAudience = "",
+  onTargetAudienceChange = () => {},
 }: ContentInputStepProps) => {
+  // Scenario takes no course: like standalone, plus three inputs of its own.
+  const isScenario = isScenarioAssessment(assessmentType);
   const [newTopic, setNewTopic] = useState("");
   const [courseSearchOpen, setCourseSearchOpen] = useState(false);
   const PAGE_LIMIT = 100;
@@ -405,7 +422,13 @@ const totalWeight = useMemo(() => {
   }, [courseWeights]);
 
 const canProceed =
-  assessmentType === "standalone"
+  // Scenario: its three inputs are mandatory; Key Learning Areas are optional.
+  isScenario
+    ? scenarioTopic.trim().length > 0 &&
+      scenarioDomains.length > 0 &&
+      targetAudience.trim().length > 0 &&
+      !!language
+    : assessmentType === "standalone"
     ? topics.length > 0 && materialFiles?.length > 0
     : assessmentType === "Competency"
     ? topics.length > 0 &&
@@ -721,7 +744,7 @@ const toggleSubTheme = (subTheme: any) => {
     <div className="space-y-4 stagger-children">
       {/* Course DO ID */}
       {
-        assessmentType != 'standalone' && assessmentType !== 'Competency' &&
+        assessmentType != 'standalone' && assessmentType !== 'Competency' && !isScenario &&
         <div className="card-elevated p-4">
           <div className="flex  items-center mb-3">
             <h3 className="text-sm font-medium text-foreground">Course name(s)
@@ -946,7 +969,7 @@ const toggleSubTheme = (subTheme: any) => {
 
 
       {/* Contextual documents and VTT availability per selected course */}
-      {assessmentType !== "standalone" && assessmentType !== "Competency" && (
+      {assessmentType !== "standalone" && assessmentType !== "Competency" && !isScenario && (
         <ContextualDocuments
           courseIds={courseIds}
           courseNameMap={courseNameMap}
@@ -1343,13 +1366,29 @@ const toggleSubTheme = (subTheme: any) => {
         </div>
       )}
 
+      {/* Scenario: Assessment Topic, Scenario Domains, Target Audience */}
+      {isScenario && (
+        <ScenarioContentFields
+          topic={scenarioTopic}
+          onTopicChange={onScenarioTopicChange}
+          domains={scenarioDomains}
+          onDomainsChange={onScenarioDomainsChange}
+          audience={targetAudience}
+          onAudienceChange={onTargetAudienceChange}
+        />
+      )}
+
       {/* Topics/Subjects / Key Themes/Modules */}
 
       <div className="card-elevated p-4">
         <div className="flex items-center mb-3">
           <h3 className="text-sm font-medium text-foreground">
             Key Learning Areas
-            <span className="text-destructive">*</span>
+            {isScenario ? (
+              <span className="text-muted-foreground text-xs font-normal"> (optional)</span>
+            ) : (
+              <span className="text-destructive">*</span>
+            )}
           </h3>
 
           <Tooltip

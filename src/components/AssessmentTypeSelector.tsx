@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
-import { Check } from "lucide-react";
+import { Check, Route } from "lucide-react";
+import { SCENARIO_ASSESSMENT_TYPE } from "./scenario";
 
 interface AssessmentTypeSelectorProps {
   selected: string;
@@ -43,6 +44,14 @@ const assessmentTypes = [
     icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" className="lucide lucide-target w-5 h-5"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>,
     description: "Competency assessment",
     title: 'Map questions to specific competencies'
+  },
+  {
+    id: SCENARIO_ASSESSMENT_TYPE,
+    name: "Scenario",
+    icon: <Route className="lucide w-5 h-5" />,
+    description: "Scenario-based assessment",
+    // PLACEHOLDER — Rithika is sending the final line for this card.
+    title: 'Questions set in real-world scenarios'
   }
 ];
 
